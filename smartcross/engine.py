@@ -144,7 +144,8 @@ class Engine:
             elif w.health.error and now - w.health.last_frame_t > fb.camera_timeout_s:
                 status = "error"
             elif now - w.health.last_frame_t > fb.camera_timeout_s:
-                status = "lost" if w.health.frames else "starting"
+                # the first frames include model warm-up in the inference queue: not a failure yet
+                status = "lost" if w.health.frames >= 3 else "starting"
             elif w.health.frozen_since is not None and now - w.health.frozen_since > fb.frozen_s:
                 status = "frozen"
             elif w.health.dark:

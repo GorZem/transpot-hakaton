@@ -36,15 +36,15 @@ YOLO распознаёт пешеходов и транспорт, по пло�
 ## Быстрый старт
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python scripts/fetch_videos.py        # демо-видео (≈ 10 МБ)
-.venv/bin/python -m smartcross                  # http://localhost:8000
+./run.sh            # http://localhost:8000
 ```
 
-Или `docker compose up --build`. Веса YOLO11n (6 МБ) скачиваются автоматически при первом
-запуске.
+Скрипт при первом запуске создаёт `.venv`, ставит зависимости (torch CPU), скачивает демо-видео
+с Wikimedia Commons (~10 МБ) и запускает сервер. Повторные запуски стартуют сразу.
+Нужны `python3` (3.10+) и `ffmpeg`. Другой порт: `./run.sh --port 8080`.
+
+Docker: `python3 scripts/fetch_videos.py && docker compose up --build`.
+Веса YOLO11n (6 МБ) скачиваются автоматически.
 
 Интерфейс:
 - **Мониторинг** — светофор, отсчёт, режим и его причина, живое видео с разметкой, обстановка

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from collections import defaultdict, deque
 
 import cv2
@@ -11,6 +13,11 @@ from smartcross.config import DetectorConfig
 from smartcross.vision.zones import COCO_CATEGORY, VEHICLE, Detection
 
 log = logging.getLogger(__name__)
+
+# One inference at a time per process: cameras take turns, each inference uses `threads`
+# cores. Running them concurrently oversubscribes the CPU (torch + OpenMP + OpenCV pools)
+# and on a small embedded PC latency explodes from ~50 ms to seconds.
+_INFER_LOCK = threading.Lock()
 
 
 class EmergencyLightDetector:
@@ -68,7 +75,7 @@ class YoloDetector:
         import torch
         from ultralytics import YOLO
 
-        torch.set_num_threads(cfg.threads)
+        torch.set_num_threads(min(cfg.threads, os.cpu_count() or 1))
         self.cfg = cfg
         self.model = YOLO(cfg.model)
         names = self.model.names
@@ -79,9 +86,10 @@ class YoloDetector:
         self._n = 0
 
     def __call__(self, frame: np.ndarray) -> list[Detection]:
-        res = self.model.track(frame, persist=True, imgsz=self.cfg.imgsz, conf=self.cfg.conf,
-                               classes=self.class_ids or None, device=self.cfg.device,
-                               tracker=self.cfg.tracker, verbose=False)[0]
+        with _INFER_LOCK:
+            res = self.model.track(frame, persist=True, imgsz=self.cfg.imgsz, conf=self.cfg.conf,
+                                   classes=self.class_ids or None, device=self.cfg.device,
+                                   tracker=self.cfg.tracker, verbose=False)[0]
         out: list[Detection] = []
         if res.boxes is None or len(res.boxes) == 0:
             return out

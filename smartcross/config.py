@@ -114,7 +114,7 @@ class DetectorConfig(BaseModel):
     imgsz: int = 640
     conf: float = 0.3
     device: str = "cpu"
-    threads: int = Field(2, ge=1, description="Потоков torch на камеру")
+    threads: int = Field(4, ge=1, description="Потоков CPU на один инференс (камеры обрабатываются по очереди)")
     tracker: str = "bytetrack.yaml"
     emergency_classes: list[str] = Field(default_factory=list,
                                          description="Имена классов спецтехники, если используется своя модель")
