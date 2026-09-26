@@ -1,0 +1,13 @@
+services:
+  smartcross:
+    build: .
+    restart: unless-stopped
+    ports: ["8000:8000"]
+    environment:
+      # set to protect configuration/operator endpoints (user: admin)
+      SMARTCROSS_ADMIN_PASSWORD: ${SMARTCROSS_ADMIN_PASSWORD:-}
+    volumes:
+      - ./data:/app/data          # videos (demo) and SQLite statistics
+      - ./deploy/data:/data       # working config (created from the template on first start)
+    # for GPIO relays on the target device:
+    # devices: ["/dev/gpiochip0:/dev/gpiochip0"]

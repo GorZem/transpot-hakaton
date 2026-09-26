@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+data/videos/*.mp4
+data/*.db
+data/*.db-*
+*.pt
+*.onnx
+*_openvino_model/
+runs/
+config/local.yaml
+deploy/data/
+reports/replay/

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block head %}<script src="/static/chart.umd.min.js"></script>{% endblock %}
+{% block content %}
+<div class="btns" style="margin-bottom:14px; align-items:center">
+  <span class="muted">Период:</span>
+  <select id="period" onchange="loadAll()">
+    <option value="1">1 час</option><option value="6">6 часов</option><option value="24" selected>24 часа</option>
+    <option value="168">7 дней</option><option value="720">30 дней</option>
+  </select>
+  <button onclick="loadAll()">Обновить</button>
+  <a class="button" id="csv" href="#">Экспорт CSV</a>
+</div>
+<div class="tiles" id="tiles"></div>
+<div class="charts">
+  <div class="card"><h2>Транспорт и пешеходы</h2><div class="chart-box"><canvas id="c-traffic"></canvas></div></div>
+  <div class="card"><h2>Интенсивность (авт/ч) и плотность (авт/км)</h2><div class="chart-box"><canvas id="c-flow"></canvas></div></div>
+  <div class="card"><h2>Среднее ожидание пешеходов, с</h2><div class="chart-box"><canvas id="c-wait"></canvas></div></div>
+  <div class="card"><h2>Распределение времени ожидания</h2><div class="chart-box"><canvas id="c-hist"></canvas></div></div>
+  <div class="card"><h2>Состав потока</h2><div class="chart-box"><canvas id="c-cls"></canvas></div></div>
+  <div class="card"><h2>Время работы в режимах</h2><div class="chart-box"><canvas id="c-modes"></canvas></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+Chart.defaults.color = '#8b98a5'; Chart.defaults.borderColor = '#2a3542';
+const C = {blue: '#3b9eff', green: '#2fbf71', orange: '#f08c2e', violet: '#a371f7', yellow: '#f0b429', red: '#ef4b4b', teal: '#2ec4c4'};
+const CLS_RU = {car: 'Легковые', bus: 'Автобусы', truck: 'Грузовые', motorcycle: 'Мотоциклы', vehicle: 'ТС (без класса)'};
+const charts = {};
+function chart(id, cfg) { charts[id]?.destroy(); charts[id] = new Chart($('#' + id), {...cfg, options: {responsive: true, maintainAspectRatio: false, animation: false, ...cfg.options}}); }
+const tile = (v, l) => `<div class="card tile"><div class="v">${v ?? '—'}</div><div class="l">${l}</div></div>`;
+
+async function loadAll() {
+  const h = $('#period').value;
+  $('#csv').href = '/api/stats/export.csv?hours=' + h;
+  const [sum, ts, cls, hist] = await Promise.all([
+    api('/api/stats/summary?hours=' + h), api('/api/stats/timeseries?hours=' + h),
+    api('/api/stats/classes?hours=' + h), api('/api/stats/waits?hours=' + h)]);
+  $('#tiles').innerHTML = [
+    tile(sum.vehicles, 'Транспортных средств'), tile(sum.pedestrians, 'Пешеходов на переходе'),
+    tile(sum.ped_phases, 'Пешеходных фаз'), tile(sum.avg_wait_s, 'Среднее ожидание, с'),
+    tile(sum.max_wait_s, 'Макс. ожидание, с'), tile(sum.max_flow_vph ? Math.round(sum.max_flow_vph) : null, 'Пик интенсивности, авт/ч'),
+    tile((sum.events.error || 0), 'Аварийных событий'),
+  ].join('');
+  const labels = ts.map(r => r.t.slice(h > 24 ? 5 : 11).replace('T', ' '));
+  chart('c-traffic', {type: 'bar', data: {labels, datasets: [
+    {label: 'ТС', data: ts.map(r => r.vehicles), backgroundColor: C.blue},
+    {label: 'Пешеходы', data: ts.map(r => r.pedestrians), backgroundColor: C.green}]}});
+  chart('c-flow', {type: 'line', data: {labels, datasets: [
+    {label: 'Интенсивность, авт/ч', data: ts.map(r => r.flow_vph), borderColor: C.orange, pointRadius: 0, yAxisID: 'y'},
+    {label: 'Плотность, авт/км', data: ts.map(r => r.density_vpkm), borderColor: C.violet, pointRadius: 0, yAxisID: 'y1'}]},
+    options: {scales: {y: {position: 'left'}, y1: {position: 'right', grid: {drawOnChartArea: false}}}}});
+  chart('c-wait', {type: 'line', data: {labels, datasets: [
+    {label: 'Среднее ожидание, с', data: ts.map(r => r.avg_wait_s), borderColor: C.teal, spanGaps: true, pointRadius: 2}]}});
+  chart('c-hist', {type: 'bar', data: {labels: hist.map(b => `${b.from}–${b.to} с`), datasets: [
+    {label: 'Вызовов', data: hist.map(b => b.count), backgroundColor: C.teal}]}});
+  const ck = Object.keys(cls);
+  chart('c-cls', {type: 'doughnut', data: {labels: ck.map(k => CLS_RU[k] || k), datasets: [
+    {data: ck.map(k => cls[k]), backgroundColor: [C.blue, C.orange, C.violet, C.yellow, C.teal], borderColor: '#171e26'}]}});
+  const mk = Object.keys(sum.mode_seconds);
+  chart('c-modes', {type: 'bar', data: {labels: mk.map(k => MODE_RU[k] || k), datasets: [
+    {label: 'минут', data: mk.map(k => +(sum.mode_seconds[k] / 60).toFixed(1)),
+     backgroundColor: mk.map(k => ({adaptive: C.green, degraded: C.yellow, fixed: C.red, flashing: C.orange}[k] || C.blue))}]},
+    options: {indexAxis: 'y', plugins: {legend: {display: false}}}});
+}
+loadAll(); setInterval(loadAll, 30000);
+</script>
+{% endblock %}
