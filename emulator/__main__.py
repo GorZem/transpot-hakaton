@@ -36,7 +36,6 @@ def main() -> None:
         "notify-level-glgsg error",
     ]))
     from direct.showbase.ShowBase import ShowBase
-    from panda3d.core import Mat4
     import uvicorn
 
     from emulator.config import Settings
@@ -71,15 +70,12 @@ def main() -> None:
     print(f"==> Камер: {len(cams.rigs)}, угол обзора {cams.dist.hfov_out:.0f}°, кадр {s.camera.width}×{s.camera.height}")
 
     if args.window:
-        base.disableMouse()
-        n = next(iter(net.objects.values()))
-        base.camera.setPos(n.xy[0] - 120, n.xy[1] - 160, 140)
-        base.camera.lookAt(n.xy[0] + 150, n.xy[1] + 250, 0)
-        base.camLens.setNearFar(0.5, 3000)
-        m = Mat4(base.camera.getMat())
-        m.invertInPlace()
-        base.mouseInterfaceNode.setMat(m)
-        base.enableMouse()
+        from emulator.render.orbit import OrbitCamera
+        base.camLens.setNearFar(0.5, 5000)
+        x0, y0, x1, y1 = net.bounds
+        OrbitCamera(base, ((x0 + x1) / 2, (y0 + y1) / 2), yaw=20, pitch=50, dist=900,
+                    objects=[(float(n.xy[0]), float(n.xy[1])) for n in net.objects.values()])
+        print("    3D-окно: ЛКМ — поворот и наклон, ПКМ — сдвиг, колесо — масштаб, 1–0 — объекты, R — общий вид")
 
     st = State(world, net, cams, hub, s)
     app = create_app(st)
