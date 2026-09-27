@@ -1,0 +1,13 @@
+[Unit]
+Description=Вход по PIN-коду для админки и эмулятора
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/smartcross/gate.env
+Environment=PYTHONIOENCODING=utf-8 PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/smartcross/emulator/deploy/server/gate.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

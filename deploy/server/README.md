@@ -2,13 +2,18 @@
 
 GPU-сервер (Ryzen 9 5950X, 64 ГБ, RTX 4090, Ubuntu 24.04). Обе части работают на нём как службы systemd:
 
-| Что | Папка на сервере | Ветка | Служба | Порт внутри | Снаружи (с паролем) |
+| Что | Папка на сервере | Ветка | Служба | Порт внутри | Снаружи (по PIN) |
 |---|---|---|---|---|---|
 | Центр и админка | `/opt/smartcross/center` | `new` | `smartcross-center` | 127.0.0.1:8000 | `http://<сервер>/` |
 | Эмулятор | `/opt/smartcross/emulator` | `emulator` | `smartcross-emulator` | 127.0.0.1:8100 | `http://<сервер>:8080/` |
+| Вход по PIN | `deploy/server/gate.py` | `emulator` | `smartcross-gate` | 127.0.0.1:8090 | — |
 
 Центр читает камеры и управляет светофорами эмулятора внутри сервера (`127.0.0.1:8100`), наружу
-открыт только nginx с паролем (`/etc/nginx/smartcross.htpasswd`, логин и пароль — в `/root/smartcross-credentials.txt`).
+открыт только nginx. Вход по PIN-коду (`gate.py`, служба `smartcross-gate`): свой PIN у админки и у эмулятора,
+после входа браузер помнит его 30 дней (выйти — `/__gate/logout`). PIN-коды хранятся только на сервере,
+в `/etc/smartcross/gate.env` (`PIN_ADMIN`, `PIN_EMULATOR`, `GATE_SECRET`); после правки —
+`systemctl restart smartcross-gate`. Сменить `GATE_SECRET` — выйти всем. Перебор PIN ограничен:
+10 попыток в минуту с одного адреса.
 Эмулятор рендерит без монитора через EGL драйвера NVIDIA (`EMULATOR_HEADLESS=1`).
 
 ## Как выкатить изменения
@@ -39,4 +44,4 @@ nvidia-smi                                      # загрузка видеок�
 Драйвер NVIDIA (`nvidia-driver-580`), `git nginx apache2-utils python3-venv build-essential ffmpeg`, Node.js 22 в `/opt/node`.
 Клонировать ветки в `/opt/smartcross/{emulator,center}`, в каждой создать `.venv` и поставить зависимости
 (центру — PyTorch с CUDA: `--index-url https://download.pytorch.org/whl/cu128`), собрать админку (`npm ci && npm run build`),
-создать пароль `htpasswd -c /etc/nginx/smartcross.htpasswd smartcross` и выполнить `bash deploy/server/install-units.sh`.
+создать `/etc/smartcross/gate.env` с PIN-кодами и выполнить `bash deploy/server/install-units.sh`.
