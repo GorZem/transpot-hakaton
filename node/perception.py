@@ -23,6 +23,7 @@ MERGE = {PERSON: 1.2, VEHICLE: 3.0}     # детекции двух камер �
 TRACK_TTL_S = 1.6
 WAIT_DWELL_S = 2.0                      # столько стоять у перехода, чтобы считаться ждущим
 STOPPED_MPS = 1.5
+QUEUE_RANGE_M = 80.0                  # очередь считается на столько метров от стоп-линии
 
 
 @dataclass
@@ -220,7 +221,7 @@ class Perception:
                 if ap.group != g or t.s is None:
                     continue
                 gap = t.s - ap.stop_s
-                if t.speed < STOPPED_MPS and -2 < gap < 60:
+                if t.speed < STOPPED_MPS and -2 < gap < QUEUE_RANGE_M:
                     q += 1
                 elif t.speed >= STOPPED_MPS and 0 < gap < 80:
                     toward = -np.asarray(ap.pts[1] - ap.pts[0])
