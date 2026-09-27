@@ -18,6 +18,9 @@ CAR_TYPES = {
     "truck":     (7.0, 2.4, 3.1, 11.5, 0.06),
     "emergency": (5.6, 2.1, 2.6, 16.5, 0.0),
 }
+# типы кузова легковых: длина, ширина, высота (совпадают с моделями в render/models.py)
+CAR_STYLES = {"sedan": (4.6, 1.8, 1.45), "hatch": (4.1, 1.76, 1.5), "suv": (4.6, 1.88, 1.72)}
+CAR_STYLE_WEIGHTS = {"sedan": 0.45, "hatch": 0.27, "suv": 0.28}
 CAR_COLORS = [(0.85, 0.86, 0.88), (0.12, 0.13, 0.15), (0.55, 0.57, 0.6), (0.62, 0.1, 0.1), (0.15, 0.25, 0.5),
               (0.92, 0.92, 0.9), (0.3, 0.32, 0.35), (0.72, 0.62, 0.45), (0.2, 0.35, 0.25), (0.9, 0.75, 0.2)]
 BUS_COLORS = [(0.95, 0.72, 0.1), (0.2, 0.55, 0.3), (0.85, 0.85, 0.85)]
@@ -39,6 +42,10 @@ class Car:
         self.id = Car._ids
         self.kind = kind
         L, W, H, v0, _ = CAR_TYPES[kind]
+        self.style = None
+        if kind == "car":
+            self.style = rng.choices(list(CAR_STYLE_WEIGHTS), weights=list(CAR_STYLE_WEIGHTS.values()))[0]
+            L, W, H = CAR_STYLES[self.style]
         self.length, self.width, self.height = L, W, H
         self.v0 = v0 * rng.uniform(0.9, 1.08)
         self.v = v
@@ -50,7 +57,8 @@ class Car:
         self.stopped = False
         self.tick = -1
         self.color = (rng.choice(BUS_COLORS) if kind == "bus" else (0.95, 0.95, 0.95) if kind == "emergency"
-                      else (0.75, 0.73, 0.7) if kind == "truck" else rng.choice(CAR_COLORS))
+                      else (0.75, 0.73, 0.7) if kind == "truck" else
+                      (0.96, 0.8, 0.1) if rng.random() < 0.06 else rng.choice(CAR_COLORS))  # 6% — такси
         self.x = self.y = self.heading = 0.0
 
     def update_pose(self) -> None:

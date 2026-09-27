@@ -300,102 +300,45 @@ def build_signals(root: NodePath, net: Network, lamp_proto: NodePath) -> list[La
 
 
 # ---------------------------------------------------------------------------------------------- агенты
-def car_proto(kind: str, length: float, width: float, height: float) -> tuple[NodePath, NodePath]:
-    """Модель смотрит вдоль +Y, начало координат — центр на земле. Возвращает (корень, кузов для окраски)."""
-    root = NodePath(f"car_{kind}")
-    body, rest = Mesh("body"), Mesh("rest")
-    L, W, H = length, width, height
-    wheel_r = 0.34 if kind == "car" else 0.5
-    glass = (0.12, 0.15, 0.2)
-    if kind == "car":
-        body.box(0, 0, 0.28, W, L, 0.62, (1, 1, 1))
-        body.box(0, -0.25, 0.9, W * 0.9, L * 0.5, 0.5, (1, 1, 1))
-        rest.box(0, -0.25, 0.93, W * 0.92, L * 0.46, 0.4, glass)
-        rest.box(0, L / 2 - 0.02, 0.55, W * 0.8, 0.05, 0.15, (0.9, 0.9, 0.8))   # фары
-        rest.box(0, -L / 2 + 0.02, 0.6, W * 0.8, 0.05, 0.12, (0.6, 0.05, 0.05))  # задние фонари
-    elif kind == "bus":
-        body.box(0, 0, 0.35, W, L, H - 0.35, (1, 1, 1))
-        rest.box(0, 0.3, 1.35, W + 0.04, L - 1.4, 1.1, glass)
-        rest.box(0, L / 2 + 0.01, 1.2, W * 0.9, 0.04, 1.4, glass)
-    elif kind == "truck":
-        rest.box(0, L / 2 - 1.1, 0.45, W, 2.2, 2.2, (0.85, 0.85, 0.87))
-        rest.box(0, L / 2 - 0.05, 1.7, W * 0.9, 0.12, 0.8, glass)
-        body.box(0, -1.2, 0.8, W + 0.1, L - 2.4, H - 0.8, (1, 1, 1))
-    else:  # скорая
-        body.box(0, 0, 0.35, W, L, H - 0.35, (1, 1, 1))
-        rest.box(0, 0, 1.0, W + 0.03, L + 0.02, 0.3, (0.85, 0.1, 0.1))
-        rest.box(0, L / 2 - 0.6, 1.5, W + 0.02, 1.0, 0.6, glass)
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            rest.cylinder(sx * (W / 2 - 0.12), sy * (L / 2 - 0.9 - (0.6 if kind == "bus" else 0)), wheel_r,
-                          wheel_r, 0.28, (0.05, 0.05, 0.05), seg=10, axis="x")
-    b = body.node()
-    b.reparentTo(root)
-    r = rest.node()
-    r.reparentTo(root)
-    r.flattenStrong()
-    if kind == "emergency":
-        bar = Mesh("bar")
-        bar.box(0, L / 2 - 0.9, H, 1.2, 0.3, 0.2, (1, 1, 1))
-        bn = bar.node()
-        bn.reparentTo(root)
-        bn.setLightOff()
-        bn.setName("lightbar")
-    return root, b
-
-
-def ped_proto() -> NodePath:
-    """Человек ростом 1,75 м; ноги и руки — отдельные узлы с шарниром для анимации шага."""
-    root = NodePath("ped")
-    torso, head, leg, arm = Mesh("torso"), Mesh("head"), Mesh("leg"), Mesh("arm")
-    torso.box(0, 0, 0.86, 0.42, 0.24, 0.6, (1, 1, 1))
-    head.sphere(0, 0, 1.6, 0.12, (0.85, 0.68, 0.55), seg=8, rings=6)
-    head.box(0, 0, 1.46, 0.1, 0.1, 0.06, (0.85, 0.68, 0.55))
-    leg.box(0, 0, -0.86, 0.15, 0.17, 0.86, (1, 1, 1))
-    leg.box(0, 0.04, -0.86, 0.15, 0.26, 0.08, (0.08, 0.08, 0.08))
-    arm.box(0, 0, -0.6, 0.1, 0.12, 0.6, (1, 1, 1))
-    t = torso.node()
-    t.reparentTo(root)
-    t.setName("torso")
-    h = head.node()
-    h.reparentTo(root)
-    for i, x in enumerate((-0.11, 0.11)):
-        pivot = root.attachNewNode(f"leg{i}")
-        pivot.setPos(x, 0, 0.86)
-        leg.node().reparentTo(pivot)
-    for i, x in enumerate((-0.27, 0.27)):
-        pivot = root.attachNewNode(f"arm{i}")
-        pivot.setPos(x, 0, 1.44)
-        arm.node().reparentTo(pivot)
-    return root
-
-
 class AgentView:
     """Синхронизирует узлы сцены с машинами и пешеходами модели."""
 
-    def __init__(self, root: NodePath, world: World):
+    def __init__(self, root: NodePath, world: World, variants: int = 30):
+        from emulator.render import models
+        self.models = models
         self.root = root.attachNewNode("agents")
         self.world = world
-        self.car_protos = {}
-        from emulator.world.sim import CAR_TYPES
-        for kind, (L, W, H, *_rest) in CAR_TYPES.items():
-            self.car_protos[kind] = car_proto(kind, L, W, H)
-        self.ped_p = ped_proto()
-        self.cars: dict[int, tuple[NodePath, NodePath, NodePath | None]] = {}
+        self.shadow_tex = models.contact_shadow_texture()
+        self.veh_protos: dict[tuple, NodePath] = {}
+        rng = random.Random(11)
+        self.ped_protos = []
+        for _ in range(variants):
+            p, _j = models.build_person(rng)
+            models.contact_shadow(p, self.shadow_tex, 0.8, 0.8)
+            p.flattenLight()
+            self.ped_protos.append(p)
+        self.cars: dict[int, tuple[NodePath, NodePath | None]] = {}
         self.peds: dict[int, tuple[NodePath, list]] = {}
+
+    def _veh_proto(self, kind: str, style: str | None, length: float, width: float) -> NodePath:
+        key = (kind, style)
+        if key not in self.veh_protos:
+            root, _body, _bar = self.models.build_vehicle(kind, style, (1, 1, 1))
+            self.models.contact_shadow(root, self.shadow_tex, width + 0.9, length + 0.9)
+            self.veh_protos[key] = root
+        return self.veh_protos[key]
 
     def sync(self, t: float) -> None:
         live = set()
         for c in self.world.cars:
             live.add(c.id)
             if c.id not in self.cars:
-                proto, _ = self.car_protos[c.kind]
-                np_ = proto.copyTo(self.root)
-                body = np_.find("body")
-                body.setColorScale(*c.color, 1)
+                np_ = self._veh_proto(c.kind, c.style, c.length, c.width).copyTo(self.root)
+                if c.kind != "emergency":
+                    np_.find("body").setColorScale(*c.color, 1)
                 bar = np_.find("lightbar")
-                self.cars[c.id] = (np_, body, None if bar.isEmpty() else bar)
-            np_, _, bar = self.cars[c.id]
+                self.cars[c.id] = (np_, None if bar.isEmpty() else bar)
+            np_, bar = self.cars[c.id]
             np_.setPos(c.x, c.y, 0)
             np_.setH(math.degrees(c.heading) - 90)
             if bar is not None:
@@ -407,24 +350,16 @@ class AgentView:
         for p in self.world.peds:
             live.add(p.id)
             if p.id not in self.peds:
-                np_ = self.ped_p.copyTo(self.root)
+                np_ = self.ped_protos[p.id % len(self.ped_protos)].copyTo(self.root)
                 np_.setScale(p.height / 1.75)
-                np_.find("torso").setColorScale(*p.top, 1)
-                limbs = [np_.find("leg0"), np_.find("leg1"), np_.find("arm0"), np_.find("arm1")]
-                for leg in limbs[:2]:
-                    leg.setColorScale(*p.bottom, 1)
-                for arm in limbs[2:]:
-                    arm.setColorScale(*p.top, 1)
-                self.peds[p.id] = (np_, limbs)
-            np_, limbs = self.peds[p.id]
+                joints = [np_.find(n) for n in ("hip-1", "hip1", "hip-1/knee", "hip1/knee",
+                                                "shoulder-1", "shoulder1", "shoulder-1/elbow", "shoulder1/elbow")]
+                self.peds[p.id] = (np_, joints)
+            np_, joints = self.peds[p.id]
             z = 0.02 if p.state == "cross" else 0.15
             np_.setPos(float(p.pos[0]), float(p.pos[1]), z)
             np_.setH(math.degrees(p.heading) - 90)
-            sw = math.sin(p.anim) * 28 if p.moving else 0.0
-            limbs[0].setP(sw)
-            limbs[1].setP(-sw)
-            limbs[2].setP(-sw * 0.8)
-            limbs[3].setP(sw * 0.8)
+            self.models.animate_person(joints, p.anim, p.moving)
         for pid in [k for k in self.peds if k not in live]:
             self.peds.pop(pid)[0].removeNode()
 

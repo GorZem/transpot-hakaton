@@ -65,6 +65,7 @@ def main() -> None:
     lamps = scene.build_signals(base.render, net, scene.make_lamp_proto())
     agents = scene.AgentView(base.render, world)
     scene.setup_lights(base.render)
+    base.render.setShaderAuto()  # попиксельное освещение и блики на кузовах
     hub = FrameHub()
     cams = CameraManager(base, net, s.camera, hub, always_on=args.always_on)
     from emulator.render.labels import Labeler
