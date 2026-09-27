@@ -150,8 +150,20 @@ class SiteRuntime:
                 return i, peds
         return None
 
+    WARMUP_S = 8.0  # после запуска камеры подключаются: отказы и смены режима в журнал не пишем
+
     def tick(self, now: float, dt: float, wall: datetime | None = None) -> None:
         self.now = now
+        if self._t_start is None:
+            self._t_start = time.monotonic()
+        warm = time.monotonic() - self._t_start < self.WARMUP_S
+        if warm:
+            for cid, st in self.streams.items():
+                self.cam_fault[cid] = st.health()
+            self.ctrl.set_mode(*self._choose_mode(), now)
+            self.ctrl.drain_events()
+            self.status_text = "Запуск: подключение камер и контроллера объекта"
+            return
         self._check_cameras()
         healthy = self.healthy()
         up = self.perception.update(healthy, self.signals)
@@ -225,6 +237,7 @@ class SiteRuntime:
             self._event(e.level, e.kind, e.message)
 
     _engaged_at = 0.0
+    _t_start: float | None = None
     _last_rejected: str | None = None
 
     def _account(self, up: Update, now: float) -> None:

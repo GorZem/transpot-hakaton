@@ -53,11 +53,11 @@ export function SettingsTab({ siteId, params, onSaved }: { siteId: string; param
 
   if (!schema) return <div className="empty">Загружаю параметры…</div>
   return (
-    <div className="settings">
+    <div className="stack" style={{ overflow: 'visible' }}>
       {groups.map(([g, props]) => (
-        <section className="card" key={g}>
-          <header><h3>{g}</h3></header>
-          <div className="body">
+        <section className="panel" key={g}>
+          <div className="panel-title caps">{g}</div>
+          <div>
             {props.map(([k, p]) => (
               <div className="field" key={k}>
                 <label htmlFor={`p-${k}`}>{p.title}</label>

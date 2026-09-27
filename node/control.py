@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from node.model import Layout, Mode, Observation, Ped, Veh
+from node.model import MODE_TITLES, Layout, Mode, Observation, Ped, Veh
 from node.params import Params
 
 EPS = 1e-6  # сравнения времени с запасом на погрешность float
@@ -71,7 +71,7 @@ class Controller:
         prev = self.mode
         self.mode, self.mode_reason = mode, reason
         level = "critical" if mode == Mode.FLASHING else ("warn" if mode in (Mode.DEGRADED, Mode.FIXED) else "info")
-        self._event(level, "mode", f"Режим «{mode.value}»: {reason}", mode=mode.value)
+        self._event(level, "mode", f"Режим «{MODE_TITLES[mode].lower()}»: {reason}", mode=mode.value)
         if mode == Mode.FLASHING:
             self.trans = None
             self.ped_active.clear()

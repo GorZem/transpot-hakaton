@@ -193,3 +193,34 @@ export const fmt = (v: number | null | undefined, digits = 0, unit = '') =>
 export const pct = (v: number | null | undefined, digits = 0) => (v == null ? '—' : fmt(v * 100, digits, '%'))
 
 export const timeOf = (iso: string) => iso.slice(11, 19)
+
+export interface Incident extends SiteEvent {
+  site: string
+  site_title: string
+}
+
+export interface AreaStats extends Stats {
+  peak_hour: { t: string; veh_flow_vph: number } | null
+  incidents_today: number
+  incidents: Incident[]
+  by_site: ({ id: string; title: string } & StatsSummary)[]
+}
+
+/** Список объектов участка с живыми статусами (общий для всех страниц). */
+export function useOverview(): { sites: SiteSummary[]; connected: boolean } {
+  const [initial, setInitial] = useState<SiteSummary[]>([])
+  const live = useLive<SiteSummary[]>('/ws/overview')
+  useEffect(() => {
+    api<{ sites: SiteSummary[] }>('/api/overview').then((d) => setInitial(d.sites)).catch(() => {})
+  }, [])
+  const byId = new Map((live.data || []).map((s) => [s.id, s]))
+  return { sites: initial.map((s) => ({ ...s, ...(byId.get(s.id) || {}) })), connected: live.connected }
+}
+
+const SITE_KEY = 'selected-site'
+export function rememberSite(id: string) {
+  try { localStorage.setItem(SITE_KEY, id) } catch { /* хранилище недоступно */ }
+}
+export function lastSite(): string | null {
+  try { return localStorage.getItem(SITE_KEY) } catch { return null }
+}

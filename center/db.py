@@ -78,16 +78,17 @@ class DB:
             self.conn.commit()
 
     # ---------- чтение ----------
-    def timeseries(self, site: str, since: datetime, bucket_min: int) -> list[dict]:
+    def timeseries(self, site: str | None, since: datetime, bucket_min: int) -> list[dict]:
+        where, args = ("site = ? AND ", [site]) if site else ("", [])
         q = f"""
         SELECT datetime((CAST(strftime('%s', ts) AS INTEGER) / (? * 60)) * (? * 60), 'unixepoch') AS bucket,
                SUM(ped_arrived) ped_arrived, SUM(ped_served) ped_served, SUM(wait_sum) wait_sum,
                MAX(wait_max) wait_max, SUM(violations) violations, SUM(groups) groups, SUM(ped_phases) ped_phases,
                SUM(veh_passed) veh_passed, SUM(veh_stopped) veh_stopped,
                SUM(CASE WHEN source = 'demo' THEN 1 ELSE 0 END) demo_rows, COUNT(*) rows
-        FROM stats_min WHERE site = ? AND ts >= ? GROUP BY bucket ORDER BY bucket"""
+        FROM stats_min WHERE {where} ts >= ? GROUP BY bucket ORDER BY bucket"""
         with self.lock:
-            rows = self.conn.execute(q, (bucket_min, bucket_min, site, minute_key(since))).fetchall()
+            rows = self.conn.execute(q, (bucket_min, bucket_min, *args, minute_key(since))).fetchall()
         out = []
         for r in rows:
             served = r["ped_served"] or 0
@@ -132,13 +133,30 @@ class DB:
             "demo_share": round((r["demo"] or 0) / r["n"], 3) if r["n"] else 0,
         }
 
-    def wait_histogram(self, site: str, since: datetime) -> list[dict]:
+    def wait_histogram(self, site: str | None, since: datetime) -> list[dict]:
         """Распределение среднего ожидания по минутам (прокси распределения ожидания)."""
-        q = """SELECT CAST(wait_sum / ped_served / 10 AS INTEGER) * 10 AS b, SUM(ped_served) n
-               FROM stats_min WHERE site = ? AND ts >= ? AND ped_served > 0 GROUP BY b ORDER BY b"""
+        where, args = ("site = ? AND ", [site]) if site else ("", [])
+        q = f"""SELECT CAST(wait_sum / ped_served / 10 AS INTEGER) * 10 AS b, SUM(ped_served) n
+               FROM stats_min WHERE {where} ts >= ? AND ped_served > 0 GROUP BY b ORDER BY b"""
         with self.lock:
-            rows = self.conn.execute(q, (site, minute_key(since))).fetchall()
+            rows = self.conn.execute(q, (*args, minute_key(since))).fetchall()
         return [{"from_s": r["b"], "count": r["n"]} for r in rows]
+
+    def count_events(self, site: str | None, since: datetime, levels: tuple[str, ...]) -> int:
+        cond, args = ["ts >= ?", f"level IN ({', '.join('?' * len(levels))})"], [since.isoformat(timespec="seconds"), *levels]
+        if site:
+            cond.append("site = ?")
+            args.append(site)
+        with self.lock:
+            return self.conn.execute(f"SELECT COUNT(*) FROM events WHERE {' AND '.join(cond)}", args).fetchone()[0]
+
+    def export_csv(self, site: str | None, since: datetime) -> str:
+        where, args = ("site = ? AND ", [site]) if site else ("", [])
+        with self.lock:
+            rows = self.conn.execute(f"SELECT site, ts, {', '.join(COLS)} FROM stats_min WHERE {where} ts >= ? ORDER BY ts, site",
+                                     (*args, minute_key(since))).fetchall()
+        head = "объект;минута;" + ";".join(COLS)
+        return "\n".join([head] + [";".join(str(v) for v in r) for r in rows]) + "\n"
 
     def events(self, site: str | None, limit: int = 50, levels: tuple[str, ...] | None = None) -> list[dict]:
         cond, args = [], []

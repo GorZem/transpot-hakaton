@@ -82,14 +82,42 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
                 "summary": db.summary(sid, since), "series": db.timeseries(sid, since, bucket),
                 "wait_hist": db.wait_histogram(sid, since)}
 
+    @app.get("/api/stats")
+    def stats_any(site: str | None = None, hours: float = 24, bucket: int = 0):
+        """Статистика объекта или всего участка (site не задан): показатели, ряды, пиковый час, инциденты."""
+        if site:
+            rt(site)
+        since = datetime.now() - timedelta(hours=hours)
+        bucket = bucket or (5 if hours <= 6 else 15 if hours <= 24 else 60)
+        hourly = db.timeseries(site, since, 60)
+        peak = max(hourly, key=lambda r: r["veh_passed"], default=None)
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        names = {sid: s["title"] for sid, s in hub.sites.items()}
+        by_site = [{"id": sid, "title": names[sid], **db.summary(sid, since)} for sid in hub.runtimes] if not site else []
+        return {"since": since.isoformat(timespec="minutes"), "bucket_min": bucket,
+                "summary": db.summary(site, since), "series": db.timeseries(site, since, bucket),
+                "wait_hist": db.wait_histogram(site, since),
+                "peak_hour": {"t": peak["t"], "veh_flow_vph": peak["veh_passed"]} if peak and peak["veh_passed"] else None,
+                "incidents_today": db.count_events(site, today, ("warn", "critical")),
+                "incidents": [{**e, "site_title": names.get(e["site"], e["site"])} for e in db.events(site, 30, ("warn", "critical"))],
+                "by_site": by_site}
+
+    @app.get("/api/stats/export.csv")
+    def export_csv(site: str | None = None, hours: float = 24):
+        since = datetime.now() - timedelta(hours=hours)
+        fname = f"stats_{site or 'uchastok'}_{datetime.now():%Y%m%d_%H%M}.csv"
+        return Response("﻿" + db.export_csv(site, since), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+    @app.get("/api/events")
+    def all_events_any(limit: int = 30, site: str | None = None):
+        names = {sid: s["title"] for sid, s in hub.sites.items()}
+        return [{**e, "site_title": names.get(e["site"], e["site"])} for e in db.events(site, limit, ("warn", "critical", "info") if site else ("warn", "critical"))]
+
     @app.get("/api/sites/{sid}/events")
     def events(sid: str, limit: int = 50, important: bool = False):
         rt(sid)
         return db.events(sid, limit, ("warn", "critical") if important else None)
-
-    @app.get("/api/events")
-    def all_events(limit: int = 30):
-        return db.events(None, limit, ("warn", "critical"))
 
     # ---------- настройки ----------
     @app.get("/api/params/schema")
