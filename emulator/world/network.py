@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from emulator.config import BBOX, DATA, OBJECTS, STREETS, ObjectSeed
+from emulator.config import BBOX, DATA, OBJECTS, ORIGIN, STREETS, ObjectSeed
 from emulator.world.geom import Polyline, Projection, angle_diff, bezier, heading_deg, right_normal, unit
 
 LANE_W = 3.5
@@ -181,9 +181,7 @@ class Network:
     def load(cls, raw_path=DATA / "osm_lyublino_raw.json") -> "Network":
         raw = json.loads(raw_path.read_text(encoding="utf-8"))
         net = cls()
-        lat0 = sum(o.lat for o in OBJECTS) / len(OBJECTS)
-        lon0 = sum(o.lon for o in OBJECTS) / len(OBJECTS)
-        net.proj = Projection(lat0, lon0)
+        net.proj = Projection(*ORIGIN)
         s, w, n, e = BBOX
         x0, y0 = net.proj.to_xy(s, w)
         x1, y1 = net.proj.to_xy(n, e)

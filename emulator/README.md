@@ -40,7 +40,7 @@ Swagger с описанием API: `http://127.0.0.1:8100/docs`.
 
 ## Объекты и камеры
 
-10 объектов, у каждого 2 камеры (`{object_id}-cam1`, `{object_id}-cam2`). Идентификаторы объектов совпадают
+14 объектов (все светофоры участка), у каждого 2 камеры (`{object_id}-cam1`, `{object_id}-cam2`). Идентификаторы объектов совпадают
 с `data/sites.json` системы.
 
 | object_id | Тип | Группы светофора |
@@ -48,6 +48,8 @@ Swagger с описанием API: `http://127.0.0.1:8100/docs`.
 | `p-krasnodonskaya-south`, `p-krasnodonskaya-mid`, `p-krasnodonskaya-north`, `p-krasnodarskaya`, `p-stavropolskaya` | переход | `veh`, `ped` |
 | `x-krasnodarskaya-krasnodonskaya`, `x-krasnodonskaya-stavropolskaya`, `x-krasnodarskaya-novorossiyskaya`, `x-krasnodonskaya-sovkhoznaya` | крестовой | `veh_A`, `veh_B`, `ped_A`, `ped_B` |
 | `t-novorossiyskaya-stavropolskaya` | Т-образный | `veh_A`, `veh_B`, `ped_A`, `ped_B` |
+| `x-krasnodarskaya-sovkhoznaya` | крестовой | `veh_A`, `veh_B`, `ped_A`, `ped_B` |
+| `t-sovkhoznaya-novorossiyskaya-w`, `t-sovkhoznaya-novorossiyskaya-c`, `t-sovkhoznaya-novorossiyskaya-e` | Т-образный | `veh_A`, `veh_B`, `ped_A`, `ped_B` |
 
 На перекрёстке ось `A` — главная улица (для Т-образного это сквозная улица), ось `B` — пересекающая.
 `ped_A` — пешеходы, пересекающие рукава оси A, они идут параллельно транспорту оси B. Названия улиц
@@ -173,7 +175,9 @@ emulator/
 - позы шага людей заранее «запечены» в цельные модели, машина — одна модель со своим цветом;
 - рендер без сглаживания с масштабом 0,85: выходной кадр по-прежнему 960×540.
 
-На RTX 3050 все 20 камер выдают около 9,5 кадра/с при цели 10 (`python -m emulator.tools.bench`).
+На RTX 3050 все 28 камер выдают около 8 кадров/с при цели 10, даже когда видеокарту параллельно на треть
+грузит YOLO системы; 20 камер — около 9,7 (`python -m emulator.tools.bench`). Попиксельное освещение
+только у машин и людей, дальность прорисовки камер 420 м.
 Готовая YOLO11s на этих кадрах находит около 97% людей и 81% машин (видимых хотя бы наполовину,
 рамка от 24 px; `python emulator/tools/eval_detection.py --model yolo11s.pt`). Для дообучения берите
 разметку из `/cam/{id}/labeled`.

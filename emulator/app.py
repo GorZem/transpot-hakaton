@@ -56,7 +56,9 @@ class Emulator:
         self.agents = scene.AgentView(base.render, self.world, self.vis, window_cam=base.cam if window else None)
         scene.setup_lights(base.render)
         if s.camera.per_pixel_lighting:
-            base.render.setShaderAuto()  # попиксельное освещение и блики на кузовах
+            # попиксельное освещение и блики только у машин и людей: дома и дороги однотонные,
+            # им хватает простого освещения, а рендер получается почти вдвое дешевле
+            self.agents.root.setShaderAuto()
         log(f"==> Камер: {len(self.cams.rigs)}, угол обзора {self.cams.dist.hfov_out:.0f}°, "
             f"кадр {s.camera.width}×{s.camera.height}, {s.camera.fps:g} кадр/с")
         if window:

@@ -215,7 +215,7 @@ class CameraManager:
         buf.setClearColor((0.72, 0.8, 0.88, 1))
         lens = PerspectiveLens()
         lens.setFov(hfov, vfov)
-        lens.setNearFar(0.3, 900)
+        lens.setNearFar(0.3, 420)  # дальше дома в кадре — несколько пикселей
         cam = self.base.makeCamera(buf, lens=lens)
         # makeCamera цепляет камеру к base.camera; камера объекта закреплена в мире,
         # иначе она двигается вместе с камерой 3D-окна
