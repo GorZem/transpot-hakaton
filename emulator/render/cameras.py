@@ -195,6 +195,9 @@ class CameraManager:
         lens.setFov(hfov, vfov)
         lens.setNearFar(0.3, 900)
         cam = self.base.makeCamera(buf, lens=lens)
+        # makeCamera цепляет камеру к base.camera; камера объекта закреплена в мире,
+        # иначе она двигается вместе с камерой 3D-окна
+        cam.reparentTo(self.base.render)
         cam.setPos(*sp.pos)
         cam.lookAt(*sp.target)
         buf.setActive(False)
