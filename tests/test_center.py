@@ -17,10 +17,8 @@ def client(tmp_path):
 def test_overview_matches_emulator_objects(client):
     sites = client.get("/api/overview").json()["sites"]
     assert len(sites) == 14
-    assert sum(s["equipped"] for s in sites) == 10
+    assert all(s["equipped"] for s in sites)  # в эмуляторе оснащены все светофорные объекты участка
     assert {s["kind"] for s in sites} == {"crossing", "tee", "cross"}
-    off = [s for s in sites if not s["equipped"]]
-    assert all(s["status"] == "off" for s in off)
 
 
 @pytest.mark.parametrize("query, expected", [
@@ -33,10 +31,9 @@ def test_search_by_intersection(client, query, expected):
     assert res and res[0]["site_id"] == expected
 
 
-def test_unequipped_site_is_read_only(client):
-    info = client.get("/api/sites/x-krasnodarskaya-sovkhoznaya").json()
-    assert info["equipped"] is False and info["layout"] is None
-    assert client.get("/api/sites/x-krasnodarskaya-sovkhoznaya/state").status_code == 409
+def test_unknown_site_is_404(client):
+    assert client.get("/api/sites/net-takogo").status_code == 404
+    assert client.get("/api/sites/net-takogo/state").status_code == 404
 
 
 def test_equipped_site_info(client):

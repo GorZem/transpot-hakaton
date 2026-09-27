@@ -75,11 +75,13 @@ def main() -> None:
     unequipped = [s for s in emap["signals"] if not s["object_id"]]
     crosses = [s for s in unequipped if degree(s) >= 4]
     tees = sorted((s for s in unequipped if degree(s) < 4), key=lambda s: s["x"])
-    assert len(crosses) == 1 and len(tees) == 3, "в эмуляторе изменился состав перекрёстков: обновите UNEQUIPPED_NAMES"
-    name_of = {crosses[0]["node_id"]: "x-krasnodarskaya-sovkhoznaya"}
-    name_of.update({t["node_id"]: sid for t, sid in zip(tees, ["t-sovkhoznaya-novorossiyskaya-w",
-                                                              "t-sovkhoznaya-novorossiyskaya-c",
-                                                              "t-sovkhoznaya-novorossiyskaya-e"])})
+    name_of: dict[int, str] = {}
+    if unequipped:  # сейчас все объекты эмулятора оснащены; ветка нужна, если появятся новые без камер
+        assert len(crosses) == 1 and len(tees) == 3, "в эмуляторе изменился состав перекрёстков: обновите UNEQUIPPED_NAMES"
+        name_of = {crosses[0]["node_id"]: "x-krasnodarskaya-sovkhoznaya"}
+        name_of.update({t["node_id"]: sid for t, sid in zip(tees, ["t-sovkhoznaya-novorossiyskaya-w",
+                                                                  "t-sovkhoznaya-novorossiyskaya-c",
+                                                                  "t-sovkhoznaya-novorossiyskaya-e"])})
     for sig in sorted(emap["signals"], key=lambda s: s["object_id"] or "~"):
         cx, cy = sig["x"], sig["y"]
         loc = lambda p: [round(p[0] - cx, 2), round(p[1] - cy, 2)]
