@@ -29,8 +29,9 @@ export function SettingsPage() {
   useEffect(() => {
     if (!id) return
     rememberSite(id)
-    setInfo(null)
-    api<SiteInfo>(`/api/sites/${id}`).then(setInfo).catch(() => setInfo(null))
+    let actual = true
+    api<SiteInfo>(`/api/sites/${id}`).then((d) => { if (actual) setInfo(d) }).catch(() => {})
+    return () => { actual = false }
   }, [id])
   useEffect(() => {
     api<SystemInfo>('/api/system').then(setSys).catch(() => {})

@@ -4,6 +4,7 @@ import {
   api, fmt, KIND_TITLES, lastSite, post, rememberSite, timeOf, useLive, useOverview,
   type Incident, type SiteInfo, type Snapshot,
 } from '../api'
+import { CameraView } from '../components/CameraView'
 import { Schematic } from '../components/Schematic'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
@@ -46,6 +47,7 @@ export function MonitoringPage() {
   const [info, setInfo] = useState<SiteInfo | null>(null)
   const [alerts, setAlerts] = useState<Incident[]>([])
   const [busy, setBusy] = useState(false)
+  const [loadError, setLoadError] = useState('')
 
   // выбранный объект: из адреса, иначе последний открытый, иначе первый оснащённый
   useEffect(() => {
@@ -57,8 +59,13 @@ export function MonitoringPage() {
   useEffect(() => {
     if (!id) return
     rememberSite(id)
-    setInfo(null)
-    api<SiteInfo>(`/api/sites/${id}`).then(setInfo).catch(() => setInfo(null))
+    setLoadError('')
+    // прежний объект остаётся на экране, пока грузится новый; опоздавший ответ отбрасывается
+    let actual = true
+    api<SiteInfo>(`/api/sites/${id}`)
+      .then((d) => { if (actual) setInfo(d) })
+      .catch(() => { if (actual) setLoadError('Не удалось загрузить объект: нет связи с центром.') })
+    return () => { actual = false }
   }, [id])
   useEffect(() => {
     const load = () => api<Incident[]>('/api/events?limit=8').then(setAlerts).catch(() => {})
@@ -137,7 +144,7 @@ export function MonitoringPage() {
                         <span>Камера {k + 1}{near ? ` · ${near}` : ''}</span>
                         <span className="muted">{st ? (st.ok ? `${fmt(st.fps, 1)} к/с` : st.fault_title) : ''}</span>
                       </div>
-                      <img src={`/video/${c.id}.mjpg`} alt={c.title} />
+                      <CameraView key={c.id} camId={c.id} alt={c.title} />
                     </figure>
                   )
                 })}
@@ -147,7 +154,7 @@ export function MonitoringPage() {
                 Камер на объекте нет. Чтобы включить его в систему, нужно установить две широкоугольные камеры
                 и подключить дорожный контроллер к центру. Рядом: {info.addresses.map((a) => a.address).slice(0, 3).join('; ')}.
               </div>
-            ) : <div className="empty">Загружаю объект…</div>}
+            ) : <div className="empty">{loadError || 'Загружаю объект…'}</div>}
           </section>
 
           <section className="panel">
