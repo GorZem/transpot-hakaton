@@ -348,6 +348,10 @@ for (const [id, key] of [["traffic", "traffic_scale"], ["peds", "pedestrian_scal
   $("#" + id).addEventListener("change", e => api("/api/scenario", {method: "PUT", body: JSON.stringify({[key]: +e.target.value})}));
 }
 
+$("#clearCars").onclick = () => api("/api/traffic/clear", {method: "POST", body: JSON.stringify({cars: true, pedestrians: false})});
+$("#clearPeds").onclick = () => api("/api/traffic/clear", {method: "POST", body: JSON.stringify({cars: false, pedestrians: true})});
+$("#fill").onclick = () => api("/api/traffic/fill", {method: "POST", body: JSON.stringify({})});
+
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/live`);
   ws.onmessage = ev => {

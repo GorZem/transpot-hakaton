@@ -100,6 +100,17 @@ class Lane:
     arm_in: Arm | None = None   # рукав узла to_node, по которому полоса подходит к узлу
     out: list = field(default_factory=list)
     cars: list = field(default_factory=list)
+    siblings: list = field(default_factory=list)   # полосы этого направления по индексу, слева направо
+    merge_requests: list = field(default_factory=list)  # машины из соседней полосы, которым нужно встроиться
+
+    @property
+    def ending(self) -> bool:
+        """Полоса заканчивается (улица сужается): до конца нужно перестроиться."""
+        return not self.out and self.to_node.kind != "end"
+
+    @property
+    def turns(self) -> set:
+        return {c.turn for c in self.out}
 
     @property
     def length(self) -> float:
@@ -114,8 +125,12 @@ class Connector:
     poly: Polyline
     turn: str
     node: Node
+    arm_out: Arm | None = None
     crosswalks: list = field(default_factory=list)
     cars: list = field(default_factory=list)
+    conflicts: list = field(default_factory=list)  # [(другой манёвр, уступаю ли я, моя зона, его зона)]
+    reserved: float = -1.0                         # до какого времени манёвр занят въезжающей машиной
+    merges: list = field(default_factory=list)     # манёвры, которые вливаются в ту же полосу
 
     @property
     def length(self) -> float:
@@ -392,60 +407,138 @@ class Network:
                     e.lanes.append(lane)
                     self.lanes.append(lane)
 
+    RANK = {"straight": 0, "right": 1, "left": 2}  # кто кому уступает: поворот налево — всем
+
+    def _connect(self, lane: Lane, tgt: Lane, turn: str, n: Node, arm_out: Arm) -> None:
+        p0, p1 = lane.poly.point(lane.length), tgt.poly.point(0)
+        h0, h1 = unit(lane.poly.direction(lane.length)), unit(tgt.poly.direction(0))
+        if turn == "straight" and n.degree <= 2 and tgt.index == lane.index:
+            poly = Polyline([p0, p1])
+        else:
+            poly = bezier(p0, h0, p1, h1)
+        c = Connector(len(self.connectors), lane, tgt, poly, turn, n, arm_out)
+        lane.out.append(c)
+        self.connectors.append(c)
+
     def _build_connectors(self) -> None:
+        """Манёвры по разметке: левая полоса — налево, правая — направо, средние — прямо.
+        На двух полосах: левая «налево и прямо», правая «прямо и направо». Где улица сужается,
+        лишние полосы заканчиваются, и машины перестраиваются заранее."""
+        for e in self.edges:
+            for fwd in (True, False):
+                sib = sorted((l for l in e.lanes if l.forward == fwd), key=lambda l: l.index)
+                for l in sib:
+                    l.siblings = sib
         for n in self.nodes:
-            ins = [l for l in self.lanes if l.to_node is n]
-            for lane in ins:
-                arm_in = lane.arm_in
-                h_in = unit(lane.poly.direction(lane.length))
-                opts = []
+            if n.kind == "end":
+                continue
+            for arm_in in n.arms:
+                ins = sorted(arm_in.lanes_in(), key=lambda l: l.index)
+                if not ins:
+                    continue
+                nin = len(ins)
+                h_in = unit(ins[0].poly.direction(ins[0].length))
+                moves = []
                 for arm in n.arms:
                     if arm is arm_in:
                         continue
-                    outs = [l for l in arm.edge.lanes if l.from_node is n and
-                            next(a for a in n.arms if a.edge is l.edge and a.at_start == l.forward) is arm]
+                    outs = sorted(arm.lanes_out(), key=lambda l: l.index)
                     if not outs:
                         continue
-                    dev = angle_diff(heading_deg(h_in), arm.bearing)
                     if n.degree <= 2:
                         turn = "straight"
-                    elif abs(dev) < 35:
-                        turn = "straight"
-                    elif abs(dev) > 150:
-                        continue  # разворот
                     else:
-                        turn = "left" if dev < 0 else "right"
-                    opts.append((turn, outs))
-                if not opts:
+                        dev = angle_diff(heading_deg(h_in), arm.bearing)
+                        if abs(dev) > 150:
+                            continue  # разворот
+                        turn = "straight" if abs(dev) < 35 else ("left" if dev < 0 else "right")
+                    moves.append((turn, arm, outs))
+                if not moves:
                     continue
-                allowed = []
-                for turn, outs in opts:
-                    if n.degree <= 2 or lane.count == 1 or turn == "straight" \
-                            or (turn == "right" and lane.index == lane.count - 1) \
-                            or (turn == "left" and lane.index == 0):
-                        allowed.append((turn, outs))
-                if not allowed:
-                    allowed = opts
-                for turn, outs in allowed:
-                    outs = sorted(outs, key=lambda l: l.index)
-                    if turn == "straight":
-                        targets = [outs[min(lane.index, len(outs) - 1)]]
-                        if lane.index == lane.count - 1:  # улица расширяется: крайняя полоса питает новые полосы
-                            targets += outs[lane.index + 1:]
-                    elif turn == "right":
-                        targets = [outs[-1]]
+                if n.degree <= 2:  # продолжение улицы: полоса в полосу, лишние заканчиваются
+                    _t, arm, outs = moves[0]
+                    m = len(outs)
+                    for l in ins:
+                        targets = [outs[l.index]] if l.index < m else []
+                        if l.index == nin - 1 and m > nin:
+                            targets += outs[nin:]  # улица расширяется: крайняя полоса питает новые
+                        for tgt in targets:
+                            self._connect(l, tgt, "straight", n, arm)
+                    continue
+                turns = {t for t, _, _ in moves}
+                allowed = {l.index: set() for l in ins}
+                if nin == 1:
+                    allowed[0] = set(turns)
+                else:
+                    for l in ins:
+                        i = l.index
+                        if i == 0 and "left" in turns:
+                            allowed[i].add("left")
+                        if i == nin - 1 and "right" in turns:
+                            allowed[i].add("right")
+                        if "straight" in turns and (nin == 2 or 0 < i < nin - 1):
+                            allowed[i].add("straight")
+                    for l in ins:  # полоса без манёвра (например, средняя на Т-образном): налево или направо
+                        if not allowed[l.index]:
+                            want = "left" if l.index < nin / 2 else "right"
+                            allowed[l.index].add(want if want in turns else next(iter(turns)))
+                    for t in turns:  # у каждого манёвра должна быть полоса
+                        if not any(t in a_ for a_ in allowed.values()):
+                            allowed[0 if t == "left" else nin - 1 if t == "right" else nin // 2].add(t)
+                for turn, arm, outs in moves:
+                    lanes_t = [l for l in ins if turn in allowed[l.index]]
+                    m = len(outs)
+                    if turn == "right":
+                        pairs = list(zip(reversed(lanes_t), reversed(outs)))
+                    elif turn == "left":
+                        pairs = list(zip(lanes_t, outs))
                     else:
-                        targets = [outs[0]]
-                    for tgt in targets:
-                        p0, p1 = lane.poly.point(lane.length), tgt.poly.point(0)
-                        h1 = unit(tgt.poly.direction(0))
-                        if turn == "straight" and n.degree <= 2 and tgt.index == lane.index:
-                            poly = Polyline([p0, p1])
-                        else:
-                            poly = bezier(p0, h_in, p1, h1)
-                        c = Connector(len(self.connectors), lane, tgt, poly, turn, n)
-                        lane.out.append(c)
-                        self.connectors.append(c)
+                        off = max(0, (m - len(lanes_t)) // 2)
+                        pairs = list(zip(lanes_t, outs[off:]))
+                    mapped = {id(l) for l, _ in pairs}
+                    for l in lanes_t:  # полосу, которой не хватило своего выезда, ведём в ближайший
+                        if id(l) not in mapped:
+                            pairs.append((l, outs[-1] if turn == "right" else outs[0] if turn == "left"
+                                          else outs[min(l.index, m - 1)]))
+                    for l, tgt in pairs:
+                        self._connect(l, tgt, turn, n, arm)
+        self._find_conflicts()
+
+    ZONE_DIST = 2.4  # оси траекторий ближе этого — кузова могут задеть друг друга
+
+    def _find_conflicts(self) -> None:
+        """Пары манёвров одного узла, траектории которых сближаются меньше ZONE_DIST (пересечение,
+        слияние в одну полосу, сближение на повороте). Для каждой пары — зона конфликта на обеих
+        траекториях: (начало, конец) в метрах от начала манёвра."""
+        samples = {}
+        for c in self.connectors:
+            n = max(2, int(c.length / 0.5) + 1)
+            ss = np.linspace(0, c.length, n)
+            samples[c.id] = (ss, np.array([c.poly.point(x) for x in ss]))
+        by_node: dict[int, list] = {}
+        for c in self.connectors:
+            by_node.setdefault(c.node.id, []).append(c)
+        for cs in by_node.values():
+            for i, a in enumerate(cs):
+                sa, pa = samples[a.id]
+                for b in cs[i + 1:]:
+                    if a.from_lane is b.from_lane:
+                        continue
+                    sb, pb = samples[b.id]
+                    d = np.hypot(pa[:, None, 0] - pb[None, :, 0], pa[:, None, 1] - pb[None, :, 1])
+                    close = d < self.ZONE_DIST
+                    if not close.any():
+                        continue
+                    ia, ib = np.nonzero(close.any(axis=1))[0], np.nonzero(close.any(axis=0))[0]
+                    za = (float(sa[ia.min()]), float(sa[ia.max()]))
+                    zb = (float(sb[ib.min()]), float(sb[ib.max()]))
+                    if a.to_lane is b.to_lane:  # слияние: «застёжка», см. World._merge_gap
+                        a.merges.append(b)
+                        b.merges.append(a)
+                        continue
+                    ra, rb = self.RANK[a.turn], self.RANK[b.turn]
+                    a.conflicts.append((b, ra > rb, za, zb))
+                    b.conflicts.append((a, rb > ra, zb, za))
 
     def _build_crosswalks(self) -> None:
         for n in self.nodes:
@@ -481,10 +574,21 @@ class Network:
         for c in self.connectors:
             n = c.node
             if n.kind == "crossing":
-                c.crosswalks = [n.arms[0].crosswalk]
+                cws = [n.arms[0].crosswalk]
             elif n.kind == "junction":
                 arm_out = next(a for a in n.arms if a.edge is c.to_lane.edge and a.at_start == c.to_lane.forward)
-                c.crosswalks = [x for x in (c.from_lane.arm_in.crosswalk, arm_out.crosswalk) if x is not None]
+                cws = [x for x in (c.from_lane.arm_in.crosswalk, arm_out.crosswalk) if x is not None]
+            else:
+                cws = []
+            # где траектория машины пересекает переход (координата вдоль перехода)
+            c.crosswalks = []
+            for cw in cws:
+                pts = np.array([c.poly.point(x) for x in np.linspace(0, c.length, 24)])
+                ends = np.array([c.from_lane.poly.point(max(0.0, c.from_lane.length - 6)), c.to_lane.poly.point(min(6.0, c.to_lane.length))])
+                allp = np.vstack([ends[:1], pts, ends[1:]])
+                d = np.abs((allp - cw.center) @ cw.road_dir)
+                k = int(np.argmin(d))
+                c.crosswalks.append((cw, float((allp[k] - cw.center) @ cw.along)))
 
     def _load_buildings(self, raw: dict) -> None:
         x0, y0, x1, y1 = self.bounds

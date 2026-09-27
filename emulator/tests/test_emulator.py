@@ -30,7 +30,66 @@ def test_all_pilot_objects_found(net):
 
 def test_every_lane_leads_somewhere(net):
     for lane in net.lanes:
+        if lane.ending:  # улица сужается: из этой полосы нужно перестроиться в соседнюю
+            assert any(l.out for l in lane.siblings if l is not lane), f"сужение без продолжения {lane.id}"
+            continue
         assert lane.out or lane.to_node.kind == "end", f"тупиковая полоса {lane.id} на {lane.edge.name}"
+
+
+def test_lane_turns_follow_markings(net):
+    """На подъезде из трёх полос: левая — налево, средняя — прямо, правая — направо."""
+    node = net.objects["x-krasnodonskaya-stavropolskaya"]
+    for arm in node.arms:
+        lanes = sorted(arm.lanes_in(), key=lambda l: l.index)
+        if len(lanes) == 3:
+            assert [sorted(l.turns) for l in lanes] == [["left"], ["straight"], ["right"]]
+
+
+def test_no_overlaps_and_lane_order(net):
+    from emulator.tools.traffic_check import overlaps
+    world = World(net, Settings())
+    worst = total = 0
+    for k in range(int(360 / 0.05)):
+        world.step(0.05)
+        for cont in world.containers:
+            cars = cont.cars
+            for i in range(1, len(cars)):
+                assert cars[i - 1].s - cars[i - 1].length >= cars[i].s - 0.05, "машины в полосе наехали друг на друга"
+        if k % 40 == 0:
+            world.update_poses()
+            o = overlaps(world.cars)
+            total += o
+            worst = max(worst, o)
+    assert worst <= 3 and total <= 12, f"наездов: всего {total}, одновременно до {worst}"
+
+
+def test_cars_use_turn_lanes(net):
+    """Машина въезжает на перекрёсток из полосы, где её манёвр разрешён разметкой."""
+    world = World(net, Settings())
+    wrong = right = 0
+    seen = set()
+    for _ in range(int(300 / 0.05)):
+        world.step(0.05)
+        for c in world.cars:
+            if hasattr(c.lane, "from_lane") and c.id not in seen and c.lane.node.kind == "junction":
+                seen.add(c.id)
+                right += 1
+                if c.lane.turn not in c.lane.from_lane.turns:
+                    wrong += 1
+    assert right > 50 and wrong == 0
+
+
+def test_clear_and_fill(net):
+    world = World(net, Settings())
+    world.warmup(60)
+    assert world.cars and world.peds
+    removed = world.clear()
+    assert removed["cars"] > 0 and not world.cars and not world.peds
+    assert all(not l.cars for l in net.lanes)
+    added = world.fill()
+    assert added > 30 and len(world.cars) == added
+    for _ in range(200):
+        world.step(0.05)
 
 
 def test_crosswalks_at_objects(net):

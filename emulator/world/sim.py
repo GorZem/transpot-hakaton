@@ -8,7 +8,7 @@ from collections import deque
 import numpy as np
 
 from emulator.config import Settings
-from emulator.world.network import Connector, Crosswalk, Lane, Network
+from emulator.world.network import LANE_W, Connector, Crosswalk, Lane, Network
 from emulator.world.signals import SignalController
 
 CAR_TYPES = {
@@ -26,6 +26,12 @@ CAR_COLORS = [(0.85, 0.86, 0.88), (0.12, 0.13, 0.15), (0.55, 0.57, 0.6), (0.62, 
 BUS_COLORS = [(0.95, 0.72, 0.1), (0.2, 0.55, 0.3), (0.85, 0.85, 0.85)]
 CLOTHES = [(0.15, 0.18, 0.25), (0.35, 0.1, 0.1), (0.2, 0.3, 0.2), (0.6, 0.55, 0.45), (0.1, 0.1, 0.1),
            (0.5, 0.5, 0.55), (0.7, 0.3, 0.2), (0.25, 0.35, 0.55), (0.8, 0.8, 0.75), (0.45, 0.25, 0.45)]
+
+
+TURN_WEIGHTS = {"straight": 0.75, "right": 0.15, "left": 0.10}
+LAT_SPEED = 1.3        # поперечная скорость при перестроении, м/с
+SOLID_ZONE = 15.0      # сплошная перед стоп-линией: перестраиваться нельзя
+VEH_GO = {"green", "green_blink", "flash_yellow", "off"}
 
 
 def idm(v: float, v0: float, gap: float, dv: float) -> float:
@@ -53,6 +59,12 @@ class Car:
         self.s = s
         self.next_conn: Connector | None = None
         self.route: deque = deque()
+        self.target_arm = None        # куда едем на ближайшем узле
+        self.turn = "straight"
+        self.desired: list = []       # полосы, из которых возможен нужный манёвр
+        self.lat = 0.0                # смещение при перестроении, м (вправо положительно)
+        self.lc_next = 0.0
+        self.yield_since = -1.0       # с какого момента уступает на перекрёстке
         self.y_dec: str | None = None
         self.stopped = False
         self.tick = -1
@@ -66,7 +78,12 @@ class Car:
         poly = self.lane.poly
         if c < 0 and isinstance(self.lane, Connector):
             poly, c = self.lane.from_lane.poly, self.lane.from_lane.length + c
-        self.x, self.y, self.heading = poly.at(c)
+        x, y, h = poly.at(c)
+        if self.lat:
+            x += math.sin(h) * self.lat
+            y -= math.cos(h) * self.lat
+            h -= math.atan2(-math.copysign(LAT_SPEED, self.lat), max(self.v, 2.0))
+        self.x, self.y, self.heading = x, y, h
 
 
 class Ped:
@@ -115,6 +132,8 @@ class World:
         self.entries = [l for l in net.lanes if l.from_node.kind == "end"]
         self.containers = list(net.lanes) + list(net.connectors)
         self.crossed_red = 0
+        self.exited = 0      # машин проехало участок
+        self.reroutes = 0    # не успели перестроиться и поехали туда, куда ведёт полоса
 
     # ---------------------------------------------------------------- шаг
     def step(self, dt: float) -> None:
@@ -155,20 +174,45 @@ class World:
             car.route = deque(route)
         lane.cars.append(car)
         self.cars.append(car)
-        self._choose_next(car)
+        self._plan(car)
         return car
 
-    def _choose_next(self, car: Car) -> None:
+    def _plan(self, car: Car) -> None:
+        """На въезде в полосу: выбрать манёвр на ближайшем узле и полосы, из которых он возможен."""
         lane = car.lane
-        if car.route and car.route[0] in lane.out:
-            car.next_conn = car.route.popleft()
+        if car.route:
+            if car.route[0] in lane.out:
+                car.next_conn = car.route.popleft()
+                car.target_arm, car.turn, car.desired = car.next_conn.arm_out, car.next_conn.turn, [lane]
+                return
+            car.route.clear()
+        node = lane.to_node
+        sib = lane.siblings or [lane]
+        if node.kind == "end":
+            car.target_arm, car.turn, car.desired, car.next_conn = None, "straight", list(sib), None
             return
-        car.route.clear()
-        if not lane.out:
-            car.next_conn = None
-            return
-        w = [{"straight": 0.62, "right": 0.2, "left": 0.18}[c.turn] for c in lane.out]
-        car.next_conn = self.rng.choices(lane.out, weights=w)[0]
+        if node.degree <= 2:
+            car.target_arm, car.turn = None, "straight"
+            car.desired = [l for l in sib if l.out] or [lane]
+        else:
+            arms = {}
+            for l in sib:
+                for c in l.out:
+                    arms[id(c.arm_out)] = (c.arm_out, c.turn)
+            options = list(arms.values())
+            arm, turn = self.rng.choices(options, weights=[TURN_WEIGHTS[t] for _, t in options])[0]
+            car.target_arm, car.turn = arm, turn
+            car.desired = [l for l in sib if any(c.arm_out is arm for c in l.out)] or [lane]
+        car.next_conn = self._conn_for(car)
+
+    def _conn_for(self, car: Car):
+        lane = car.lane
+        opts = [c for c in lane.out if car.target_arm is None or c.arm_out is car.target_arm]
+        if not opts:
+            return None
+        if len(opts) == 1:
+            return opts[0]
+        return min(opts, key=lambda c: (len(c.to_lane.cars), self.rng.random()))  # в более свободную полосу
 
     def _downstream_gap(self, car: Car) -> tuple[float, float]:
         """Расстояние до хвоста ближайшей машины впереди за пределами своего участка и её скорость."""
@@ -177,7 +221,9 @@ class World:
         if isinstance(c, Lane):
             conn = car.next_conn
             if conn is None:
-                return 1e9, 0.0
+                if c.to_node.kind == "end":
+                    return 1e9, 0.0
+                return dist + 1.0, 0.0  # полоса заканчивается или манёвр не выбран: ждать у конца
             if conn.cars:
                 t = conn.cars[-1]
                 return dist + t.s - t.length, t.v
@@ -208,7 +254,7 @@ class World:
             else:
                 car.y_dec = None
         if not stop and dist > car.v * car.v / (2 * 6.0):
-            if any(cw.peds for cw in conn.crosswalks):
+            if self._peds_in_path(conn):
                 stop = True
             else:  # не въезжать на перекрёсток и переход, если за ними некуда встать
                 tl = conn.to_lane
@@ -216,14 +262,169 @@ class World:
                 room = (t.s - t.length + (0 if t in conn.cars else conn.length)) if t else 1e9
                 if room < conn.length + car.length + 2.5 and t.v < 1.5:
                     stop = True
+                elif conn.merges and any(m.cars for m in conn.merges):
+                    # слияние: в соседнем манёвре уже кто-то вливается — въезжать, только если места на двоих
+                    tail = tl.cars[-1] if tl.cars else None
+                    free = tail.s - tail.length if tail else 1e9
+                    if free < 2 * car.length + 8 and (tail is None or tail.v < 3):
+                        stop = True
+        if not stop and conn.conflicts and dist > car.v * car.v / (2 * 7.0) - 0.5:
+            # конфликт у самого въезда — ждать у стоп-линии; дальше — въехать и ждать внутри перед точкой
+            at = self._conflict_stop(car, conn, -dist)
+            # ждать внутри перекрёстка можно, только если перед точкой конфликта помещается машина
+            stop = at is not None and at < car.length + 1.0
+            if stop and car.yield_since >= 0 and self.t - car.yield_since > 20.0 and self._lane_go(lane):
+                stop = False  # 20 с на зелёный без разрыва в потоке — проехать, иначе затор
+        if not stop and dist < max(4.0, car.v * 0.8):
+            conn.reserved = self.t + 0.8  # въезжаю: уступающие мне подождут
         return stop
+
+    @staticmethod
+    def _peds_in_path(conn: Connector) -> bool:
+        """Пешеход на переходе у траектории машины (в пределах 3 м по ходу перехода)."""
+        for cw, pos in conn.crosswalks:
+            for p in cw.peds:
+                if abs(float((p.pos - cw.center) @ cw.along) - pos) < 3.0:
+                    return True
+        return False
+
+    def _lane_go(self, lane: Lane) -> bool:
+        sc = lane.to_node.signal
+        if sc is None:
+            return True
+        return sc.veh_state(lane.arm_in.axis if lane.to_node.kind == "junction" else "A") in VEH_GO
+
+    def _merge_gap(self, car: Car, conn: Connector, rem: float) -> tuple[float, float]:
+        """«Застёжка» на слиянии: машина, которая ближе к точке слияния на соседнем манёвре
+        (или подъезжает к нему), считается лидером. rem — сколько мне осталось до точки слияния."""
+        best, bv = 1e9, 0.0
+        for other in conn.merges:
+            cand = []
+            for c in other.cars:
+                cand.append((other.length - c.s, c))
+            fl = other.from_lane
+            for c in fl.cars:
+                if c.next_conn is other:
+                    if c.v > 1.0 or fl.length - c.s < 3:
+                        cand.append((fl.length - c.s + other.length, c))
+                    break
+            for r, c in cand:
+                if r < rem - 0.01 or (abs(r - rem) <= 0.01 and c.id < car.id):
+                    g = rem - r - c.length
+                    if g < best:
+                        best, bv = g, c.v
+        return best, bv
+
+    def _conflict_stop(self, car: Car, conn: Connector, front: float) -> float | None:
+        """Где на манёвре conn остановиться, чтобы не въехать в зону конфликта с другой машиной
+        (None — ехать). front — положение передка на манёвре (отрицательное, пока машина до стоп-линии).
+        Уступаю, если зону занимает другая машина; при равном приоритете — если она ближе к зоне;
+        при её приоритете (я поворачиваю налево, она едет прямо) — если она едет к зоне или подъезжает
+        к стоп-линии на зелёный."""
+        stop_at = None
+        for other, i_yield, (a_in, a_out), (b_in, b_out) in conn.conflicts:
+            if front > a_in + 0.5:
+                continue  # уже в зоне: проезжаю
+            my_d = a_in - front
+            blocked = False
+            for c in other.cars:
+                if c.s - c.length > b_out + 0.5:
+                    continue  # уже покинула зону
+                if c.v < 0.5 and c.s < b_in - 0.3:
+                    continue  # сама стоит и ждёт перед зоной
+                d = b_in - c.s
+                if d < 0 or i_yield or d < my_d or (abs(d - my_d) < 0.1 and c.id < car.id):
+                    blocked = True
+                    break
+            if not blocked and i_yield:
+                if other.reserved > self.t:
+                    blocked = True
+                else:
+                    # интервал, который водитель принимает: 3,5 с, после 15 с ожидания — 2 с
+                    patient = car.yield_since < 0 or self.t - car.yield_since < 15
+                    gap_s = 3.5 if patient else 2.0
+                    fl = other.from_lane
+                    head = next((c for c in fl.cars if c.next_conn is other), None)
+                    if head is not None and head.v > 1.5 \
+                            and fl.length - head.s < head.v * gap_s + 3 and self._lane_go(fl):
+                        blocked = True
+            if blocked:
+                at = a_in - 1.0
+                stop_at = at if stop_at is None else min(stop_at, at)
+        if stop_at is not None:
+            # не стоять в чужой зоне конфликта: иначе машины разных направлений запирают друг друга
+            moved = True
+            while moved:
+                moved = False
+                for _o, _y, (z_in, z_out), _zb in conn.conflicts:
+                    if z_in - 1.0 < stop_at < z_out + 1.0 and front < z_in:
+                        stop_at, moved = z_in - 1.0, True
+        if stop_at is None:
+            car.yield_since = -1.0
+        elif car.yield_since < 0:
+            car.yield_since = self.t
+        elif front > 0 and self.t - car.yield_since > 8.0:
+            return None  # стоит внутри перекрёстка слишком долго: завершить манёвр, чтобы не было затора
+        return stop_at
+
+    def _lane_change(self, car: Car, lane: Lane, dist: float) -> None:
+        """Перестроение в полосу нужного манёвра; в заканчивающейся полосе — обязательное, «застёжкой»."""
+        if car.lat or self.t < car.lc_next or car.kind == "emergency" and car.route:
+            return
+        car.lc_next = self.t + 0.3
+        if lane in car.desired or not car.desired:
+            return
+        ending = lane.ending
+        if dist < SOLID_ZONE and not ending:
+            return
+        tgt_idx = min((l.index for l in car.desired), key=lambda i: abs(i - lane.index))
+        step = 1 if tgt_idx > lane.index else -1
+        sib = lane.siblings
+        j = lane.index + step
+        if not 0 <= j < len(sib):
+            return
+        nb = sib[j]
+        s_new = car.s * nb.length / max(lane.length, 1e-6)
+        if s_new < car.length + 0.5 or s_new > nb.length - 0.5:
+            return
+        leader = follower = None
+        for c in nb.cars:  # по убыванию s
+            if c.s > s_new:
+                leader = c
+            else:
+                follower = c
+                break
+        urgent = ending or dist < 60
+        front = leader.s - leader.length - s_new if leader else 1e9
+        back = s_new - car.length - follower.s if follower else 1e9
+        need_f = max(2.0, car.v * 0.5) if urgent else max(4.0, car.v * 1.0)
+        need_b = (max(2.0, follower.v * 0.6) if urgent else max(5.0, follower.v * 1.2)) if follower else 0.0
+        if front < need_f or back < need_b:
+            if urgent:
+                nb.merge_requests.append(car)  # попросить соседей оставить место
+            return
+        lane.cars.remove(car)
+        k = 0
+        while k < len(nb.cars) and nb.cars[k].s > s_new:
+            k += 1
+        nb.cars.insert(k, car)
+        car.lane, car.s = nb, s_new
+        car.lat = -step * LANE_W
+        car.lc_next = self.t + 2.0
+        car.next_conn = self._conn_for(car)
 
     def _move_cars(self, dt: float) -> None:
         tick = self.ticks
+        requests = {}
+        for lane in self.net.lanes:
+            if lane.merge_requests:
+                requests[id(lane)] = lane.merge_requests
+                lane.merge_requests = []
         for cont in self.containers:
             cars = cont.cars
             if not cars:
                 continue
+            reqs = requests.get(id(cont))
             for car in list(cars):
                 if car.tick == tick or car.lane is not cont:
                     continue
@@ -235,10 +436,32 @@ class World:
                 else:
                     gap, lv = self._downstream_gap(car)
                     acc = idm(car.v, car.v0, gap, car.v - lv) if gap < 1e8 else idm(car.v, car.v0, 1e9, 0)
+                    mc = car.next_conn if isinstance(cont, Lane) else cont
+                    if mc is not None and mc.merges:
+                        rem = (cont.length - car.s + mc.length) if isinstance(cont, Lane) else (mc.length - car.s)
+                        if rem < 80:
+                            mg, mv = self._merge_gap(car, mc, rem)
+                            if mg < 1e8:
+                                acc = min(acc, idm(car.v, car.v0, mg, car.v - mv))
                     if isinstance(cont, Lane):
                         dist = cont.length - car.s
+                        if car.next_conn is None and cont.out and dist < SOLID_ZONE:
+                            # не успел перестроиться: едет туда, куда ведёт его полоса
+                            conn = self.rng.choice(cont.out)
+                            self.reroutes += 1
+                            car.target_arm, car.turn, car.next_conn = conn.arm_out, conn.turn, conn
                         if dist > -0.5 and self._must_stop(car, cont, dist):
                             acc = min(acc, idm(car.v, car.v0, dist + 1.5, car.v))
+                if isinstance(cont, Connector) and cont.conflicts:
+                    at = self._conflict_stop(car, cont, car.s)
+                    if at is not None and at > car.s - 0.5:
+                        acc = min(acc, idm(car.v, car.v0, at + 1.5 - car.s, car.v))
+                if reqs:  # пропустить машину, которая встраивается из заканчивающейся или соседней полосы
+                    for rq in reqs:
+                        if rq.lane is not cont:
+                            sp = rq.s * cont.length / max(rq.lane.length, 1e-6)
+                            if 0 < sp - car.s < 45 and rq.v < car.v + 3:
+                                acc = min(acc, idm(car.v, car.v0, sp - rq.length - car.s, car.v - rq.v))
                 acc = max(acc, -8.0)
                 car.v = max(0.0, car.v + acc * dt)
                 car.s += car.v * dt
@@ -247,15 +470,29 @@ class World:
                     car.s = min(car.s, ld.s - ld.length - 0.3)
                 if car.v < 0.5 and not car.stopped:
                     car.stopped = True
+                if car.lat:
+                    d = LAT_SPEED * dt
+                    car.lat = 0.0 if abs(car.lat) <= d else car.lat - math.copysign(d, car.lat)
                 if car.s >= cont.length and idx == 0:
                     self._transfer(car, cont)
+                elif isinstance(cont, Lane) and len(car.desired) and cont not in car.desired:
+                    self._lane_change(car, cont, cont.length - car.s)
 
     def _transfer(self, car: Car, cont) -> None:
+        # страховка: если на следующем участке нет места, ждать в конце текущего, а не въезжать в машину
+        nxt = cont.to_lane if isinstance(cont, Connector) else car.next_conn
+        if nxt is not None and nxt.cars:
+            tail = nxt.cars[-1]
+            over = car.s - cont.length
+            if tail.s - tail.length < over + 0.3:
+                car.s, car.v = cont.length - 0.01, 0.0
+                return
         cont.cars.remove(car)
         if isinstance(cont, Lane):
             conn = car.next_conn
             if conn is None:
                 self.cars.remove(car)
+                self.exited += 1
                 return
             car.s -= cont.length
             car.lane = conn
@@ -266,7 +503,45 @@ class World:
             car.y_dec = None
             car.stopped = False
             cont.to_lane.cars.append(car)
-            self._choose_next(car)
+            self._plan(car)
+
+    def clear(self, cars: bool = True, peds: bool = True) -> dict:
+        """Убрать машины и/или пешеходов. Генерация продолжается как обычно."""
+        out = {"cars": 0, "pedestrians": 0}
+        if cars:
+            out["cars"] = len(self.cars)
+            for c in self.containers:
+                c.cars.clear()
+            for l in self.net.lanes:
+                l.merge_requests = []
+            for c in self.net.connectors:
+                c.reserved = -1.0
+            self.cars.clear()
+        if peds:
+            out["pedestrians"] = len(self.peds)
+            self.peds.clear()
+            for cw in self.net.crosswalks:
+                cw.peds.clear()
+        return out
+
+    def fill(self, per_km: float = 25.0) -> int:
+        """Сразу расставить машины по свободным полосам (плотность — машин на километр полосы)."""
+        added = 0
+        for lane in self.net.lanes:
+            if lane.cars or lane.length < 20:
+                continue
+            spacing = 1000.0 / max(per_km * self.cfg.traffic.traffic_scale, 1e-3)
+            s = lane.length - self.rng.uniform(5, spacing)
+            while s > 12:
+                r = self.rng.random()
+                kind = "bus" if r < 0.05 else "truck" if r < 0.09 else "car"
+                car = Car(kind, lane, s, CAR_TYPES[kind][3] * 0.6, self.rng)
+                lane.cars.append(car)
+                self.cars.append(car)
+                self._plan(car)
+                added += 1
+                s -= max(car.length + 8, spacing * self.rng.uniform(0.6, 1.4))
+        return added
 
     # ---------------------------------------------------------------- пешеходы
     def _spawn_peds(self, dt: float) -> None:

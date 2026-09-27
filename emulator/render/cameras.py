@@ -88,7 +88,7 @@ class Distortion:
         xs, ys = np.meshgrid(np.arange(W, dtype=np.float64), np.arange(H, dtype=np.float64))
         und = self.undistort_norm((xs - W / 2) / f, (ys - H / 2) / f)
         mx, my = float(np.abs(und[..., 0]).max()), float(np.abs(und[..., 1]).max())
-        self.fr = f  # масштаб центра рендера совпадает с выходным
+        self.fr = f * cs.render_scale  # масштаб центра рендера
         self.Wr = int(math.ceil(mx * self.fr)) * 2 + 4
         self.Hr = int(math.ceil(my * self.fr)) * 2 + 4
         self.hfov_r = math.degrees(2 * math.atan(self.Wr / 2 / self.fr))
@@ -202,7 +202,7 @@ class CameraManager:
         fb = FrameBufferProperties()
         fb.setRgbColor(True)
         fb.setDepthBits(24)
-        fb.setMultisamples(4)
+        fb.setMultisamples(self.cs.msaa)
         buf = self.base.graphicsEngine.makeOutput(self.base.pipe, f"buf_{sp.id}", -2, fb, WindowProperties.size(W, H),
                                                   GraphicsPipe.BFRefuseWindow, self.base.win.getGsg(), self.base.win)
         if buf is None:  # без мультисэмплинга
@@ -253,13 +253,14 @@ class CameraManager:
     def update(self, now: float, sim_t: float) -> None:
         stamp = datetime.now()
         for rig in self.pending:
-            raw = rig.tex.getRamImageAs("BGR")
+            raw = rig.tex.getRamImage()  # без перекодировки: BGR или BGRA как лежит в текстуре
             rig.buffer.setActive(False)
             rig.rendering = False
             if not raw:
                 continue
             h, w = rig.tex.getYSize(), rig.tex.getXSize()
-            arr = np.frombuffer(bytes(raw), np.uint8).reshape(h, w, 3)
+            ch = rig.tex.getNumComponents()
+            arr = np.array(memoryview(raw), dtype=np.uint8, copy=True).reshape(h, w, ch)  # одна быстрая копия
             self.pool.submit(self._process, rig, arr, stamp, rig.labels, rig.labels_meta)
             rig.labels = rig.labels_meta = None
         self.pending = []
@@ -291,6 +292,8 @@ class CameraManager:
     def _process(self, rig: Rig, arr: np.ndarray, stamp: datetime, labels=None, meta=None) -> None:
         try:
             cid = rig.spec.id
+            if arr.shape[2] == 4:
+                arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
             if cid == "overview":
                 img = cv2.flip(arr, 0)
             else:

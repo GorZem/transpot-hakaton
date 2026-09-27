@@ -19,6 +19,8 @@ button{font:inherit;color:inherit}
 .slider{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
 .slider input{accent-color:var(--accent);width:110px}
 .slider output{font-family:var(--mono);color:var(--ink);min-width:34px}
+.tbtns{display:flex;gap:6px;flex-wrap:wrap}
+.btn.sm{padding:4px 9px;font-size:12.5px}
 .doc{margin-left:auto;color:var(--ink);text-decoration:none;border:1px solid var(--line);padding:4px 10px;border-radius:6px}
 .doc:hover{border-color:var(--muted)}
 

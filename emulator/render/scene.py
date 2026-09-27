@@ -113,7 +113,33 @@ class Mesh:
 
 
 # ---------------------------------------------------------------------------------------------- статика
-def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
+def draw_arrow(mesh: "Mesh", poly: Polyline, s0: float, turns: set) -> None:
+    """Стрелка 1.18 на полосе: стержень и наконечники для каждого разрешённого направления."""
+    p = poly.point(s0)
+    d = unit(poly.direction(s0))
+    r = right_normal(d)
+    z = Z_MARK + 0.004
+
+    def pt(f, lat):  # стрелка около 5 м длиной, как на настоящей разметке
+        q = p + d * f * 1.65 + r * lat * 1.4
+        return (q[0], q[1], z)
+
+    def quad(a, b, c, e):
+        mesh.quad(a, b, c, e, WHITE, (0, 0, 1))
+
+    quad(pt(-2.6, -0.08), pt(-2.6, 0.08), pt(0.2, 0.08), pt(0.2, -0.08))  # стержень
+    if "straight" in turns:
+        quad(pt(0.2, -0.08), pt(0.2, 0.08), pt(0.9, 0.08), pt(0.9, -0.08))
+        mesh.tri(pt(0.9, -0.3), pt(0.9, 0.3), pt(1.7, 0.0), WHITE, (0, 0, 1))
+    for side, t in ((1, "right"), (-1, "left")):
+        if t in turns:
+            quad(pt(-0.5, -0.08 * side), pt(-0.2, 0.08 * side), pt(0.35, 0.75 * side), pt(0.05, 0.62 * side))
+            mesh.tri(pt(-0.05, 0.5 * side), pt(0.55, 1.0 * side), pt(0.55, 0.3 * side), WHITE, (0, 0, 1))
+
+
+def build_static(root: NodePath, net: Network, rng: random.Random, vis=None) -> None:
+    """vis — зона видимости камер: вне её дома без окон, без деревьев, бордюров и прерывистой разметки."""
+    near = (lambda x, y: True) if vis is None else vis.detailed
     ground, road, marks, walks, bld, trees = (Mesh(n) for n in ("ground", "road", "marks", "walks", "bld", "trees"))
     x0, y0, x1, y1 = net.bounds
     m = 400
@@ -130,6 +156,8 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
             walks.ribbon(sp, e.half_right, e.half_right + SIDEWALK_W, Z_SIDEWALK, SIDEWALK)
             walks.ribbon(sp, -e.half_left - SIDEWALK_W, -e.half_left, Z_SIDEWALK, SIDEWALK)
             for d in (e.half_right, -e.half_left):  # бордюр
+                if not any(near(*q) for q in sp.p):
+                    continue
                 Lp = sp.offset(d).p
                 for i in range(len(Lp) - 1):
                     walks.quad((*Lp[i], 0.0), (*Lp[i + 1], 0.0), (*Lp[i + 1], Z_SIDEWALK), (*Lp[i], Z_SIDEWALK), CURB)
@@ -137,7 +165,7 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
             s = rng.uniform(4, 10)
             while s < sp.length:
                 p = sp.point(s)
-                if min((float(np.hypot(*(p - n.xy))) for n in net.signal_nodes), default=1e9) > 30:
+                if near(p[0], p[1]) and min((float(np.hypot(*(p - n.xy))) for n in net.signal_nodes), default=1e9) > 30:
                     for side, d in ((1, e.half_right + SIDEWALK_W + 1.8), (-1, -e.half_left - SIDEWALK_W - 1.8)):
                         if rng.random() < 0.7:
                             q = sp.offset(d).point(s)
@@ -160,10 +188,16 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
             if lane.index == 0:
                 continue
             lp = lane.poly.offset(-LANE_W / 2)
+            # перед перекрёстком — сплошная: перестраиваться нельзя (как в модели движения)
+            solid_from = lp.length - 15.0 if lane.to_node.kind in ("junction", "priority") else lp.length
             s = 0.0
-            while s < lp.length - 1:
-                marks.ribbon(lp.sub(s, min(s + 3, lp.length)), -0.06, 0.06, Z_MARK, WHITE)
+            while s < solid_from - 1:
+                q = lp.point(s)
+                if near(q[0], q[1]):
+                    marks.ribbon(lp.sub(s, min(s + 3, solid_from)), -0.06, 0.06, Z_MARK, WHITE)
                 s += 9
+            if solid_from < lp.length and near(*lp.point(lp.length)):
+                marks.ribbon(lp.sub(max(0.0, solid_from), lp.length), -0.07, 0.07, Z_MARK, WHITE)
     for n in net.nodes:
         if n.kind in ("junction", "priority"):
             r = n.radius + CROSSWALK_W + 1.0
@@ -172,6 +206,12 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
                 a0, a1 = 2 * math.pi * i / seg, 2 * math.pi * (i + 1) / seg
                 road.tri((*n.xy, Z_JUNCTION), (n.xy[0] + r * math.cos(a0), n.xy[1] + r * math.sin(a0), Z_JUNCTION),
                          (n.xy[0] + r * math.cos(a1), n.xy[1] + r * math.sin(a1), Z_JUNCTION), ASPHALT_JUNCTION, (0, 0, 1))
+    # стрелки направлений движения по полосам перед перекрёстками
+    for lane in net.lanes:
+        if lane.to_node.kind in ("junction", "priority") and lane.turns and lane.length > 22:
+            p = lane.poly.point(lane.length - 12)
+            if near(p[0], p[1]):
+                draw_arrow(marks, lane.poly, lane.length - 12, lane.turns)
     # стоп-линии
     for lane in net.lanes:
         if lane.to_node.signal is not None or lane.to_node.kind == "crossing":
@@ -197,6 +237,7 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
     for b in net.buildings:
         pts, h = b["pts"], b["height"]
         col = BUILDING_COLORS[b["id"] % len(BUILDING_COLORS)]
+        detail = vis is None or vis.building_detailed(pts)
         area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
         if area < 0:
             pts = pts[::-1]
@@ -204,7 +245,7 @@ def build_static(root: NodePath, net: Network, rng: random.Random) -> None:
             a, c = pts[i], pts[(i + 1) % len(pts)]
             bld.quad((*a, 0), (*c, 0), (*c, h), (*a, h), col)
             # полосы окон: тёмные пояса на каждом этаже
-            if h >= 6:
+            if h >= 6 and detail:
                 L = math.hypot(c[0] - a[0], c[1] - a[1])
                 if L > 3:
                     dx, dy = (c[0] - a[0]) / L, (c[1] - a[1]) / L
@@ -301,24 +342,44 @@ def build_signals(root: NodePath, net: Network, lamp_proto: NodePath) -> list[La
 
 # ---------------------------------------------------------------------------------------------- агенты
 class AgentView:
-    """Синхронизирует узлы сцены с машинами и пешеходами модели."""
+    """Синхронизирует узлы сцены с машинами и пешеходами модели.
 
-    def __init__(self, root: NodePath, world: World, variants: int = 30):
+    Модели агентов вне зоны видимости камер (и вне 3D-окна) убираются из сцены: агенты продолжают
+    двигаться в модели, но камеры не тратят на них время. Модель создаётся при первом появлении в зоне.
+    """
+
+    POSES = 8
+
+    def __init__(self, root: NodePath, world: World, vis=None, window_cam: NodePath | None = None, variants: int = 30):
+        from panda3d.core import Point2, Point3
         from emulator.render import models
         self.models = models
+        self.render = root
         self.root = root.attachNewNode("agents")
         self.world = world
+        self.vis = vis
+        self.window_cam = window_cam
+        self._P2, self._P3 = Point2, Point3
         self.shadow_tex = models.contact_shadow_texture()
         self.veh_protos: dict[tuple, NodePath] = {}
         rng = random.Random(11)
+        # позы шага заранее «запекаются» в цельные модели: при анимации переключается готовая поза,
+        # и видеокарта рисует человека одной командой вместо десятка
+        from panda3d.core import SwitchNode
         self.ped_protos = []
         for _ in range(variants):
-            p, _j = models.build_person(rng)
-            models.contact_shadow(p, self.shadow_tex, 0.8, 0.8)
-            p.flattenLight()
-            self.ped_protos.append(p)
-        self.cars: dict[int, tuple[NodePath, NodePath | None]] = {}
-        self.peds: dict[int, tuple[NodePath, list]] = {}
+            person, joints = models.build_person(rng)
+            proto = NodePath("ped")
+            sw = proto.attachNewNode(SwitchNode("poses"))
+            for k in range(self.POSES + 1):
+                models.animate_person(joints, 2 * math.pi * k / self.POSES, k < self.POSES)
+                pose = person.copyTo(sw)
+                pose.flattenStrong()
+            models.contact_shadow(proto, self.shadow_tex, 0.8, 0.8)
+            self.ped_protos.append(proto)
+        self.cars: dict[int, list] = {}   # id -> [узел, мигалка, показан]
+        self.peds: dict[int, list] = {}   # id -> [узел, суставы, показан]
+        self.shown = {"cars": 0, "peds": 0}
 
     def _veh_proto(self, kind: str, style: str | None, length: float, width: float) -> NodePath:
         key = (kind, style)
@@ -328,40 +389,70 @@ class AgentView:
             self.veh_protos[key] = root
         return self.veh_protos[key]
 
+    def _visible(self, x: float, y: float) -> bool:
+        if self.vis is None or self.vis.agent_visible(x, y):
+            return True
+        if self.window_cam is not None:
+            p = self.window_cam.getRelativePoint(self.render, self._P3(x, y, 1.0))
+            if 0 < p.y < 900 and self.window_cam.node().getLens().project(p, self._P2()):
+                return True
+        return False
+
+    @staticmethod
+    def _show(entry: list, on: bool) -> None:
+        if entry[2] != on:
+            entry[0].unstash() if on else entry[0].stash()
+            entry[2] = on
+
     def sync(self, t: float) -> None:
-        live = set()
+        live, shown = set(), 0
+        blink = (0.1, 0.3, 1.0) if int(t * 4) % 2 else (1.0, 0.1, 0.1)
         for c in self.world.cars:
             live.add(c.id)
-            if c.id not in self.cars:
+            vis = self._visible(c.x, c.y)
+            e = self.cars.get(c.id)
+            if e is None:
+                if not vis:
+                    continue
                 np_ = self._veh_proto(c.kind, c.style, c.length, c.width).copyTo(self.root)
                 if c.kind != "emergency":
                     np_.find("body").setColorScale(*c.color, 1)
+                    np_.flattenStrong()  # кузов и детали в одну модель с цветом этой машины
                 bar = np_.find("lightbar")
-                self.cars[c.id] = (np_, None if bar.isEmpty() else bar)
-            np_, bar = self.cars[c.id]
-            np_.setPos(c.x, c.y, 0)
-            np_.setH(math.degrees(c.heading) - 90)
-            if bar is not None:
-                col = (0.1, 0.3, 1.0) if int(t * 4) % 2 else (1.0, 0.1, 0.1)
-                bar.setColor(col[0], col[1], col[2], 1)
+                e = self.cars[c.id] = [np_, None if bar.isEmpty() else bar, True]
+            self._show(e, vis)
+            if not vis:
+                continue
+            shown += 1
+            np_ = e[0]
+            np_.setPosHpr(c.x, c.y, 0, math.degrees(c.heading) - 90, 0, 0)
+            if e[1] is not None:
+                e[1].setColor(blink[0], blink[1], blink[2], 1)
         for cid in [k for k in self.cars if k not in live]:
             self.cars.pop(cid)[0].removeNode()
-        live = set()
+        self.shown["cars"] = shown
+        live, shown = set(), 0
         for p in self.world.peds:
             live.add(p.id)
-            if p.id not in self.peds:
+            x, y = float(p.pos[0]), float(p.pos[1])
+            vis = self._visible(x, y)
+            e = self.peds.get(p.id)
+            if e is None:
+                if not vis:
+                    continue
                 np_ = self.ped_protos[p.id % len(self.ped_protos)].copyTo(self.root)
                 np_.setScale(p.height / 1.75)
-                joints = [np_.find(n) for n in ("hip-1", "hip1", "hip-1/knee", "hip1/knee",
-                                                "shoulder-1", "shoulder1", "shoulder-1/elbow", "shoulder1/elbow")]
-                self.peds[p.id] = (np_, joints)
-            np_, joints = self.peds[p.id]
-            z = 0.02 if p.state == "cross" else 0.15
-            np_.setPos(float(p.pos[0]), float(p.pos[1]), z)
-            np_.setH(math.degrees(p.heading) - 90)
-            self.models.animate_person(joints, p.anim, p.moving)
+                e = self.peds[p.id] = [np_, np_.find("poses").node(), True]
+            self._show(e, vis)
+            if not vis:
+                continue
+            shown += 1
+            e[0].setPosHpr(x, y, 0.02 if p.state == "cross" else 0.15, math.degrees(p.heading) - 90, 0, 0)
+            k = int((p.anim % (2 * math.pi)) / (2 * math.pi) * self.POSES) % self.POSES if p.moving else self.POSES
+            e[1].setVisibleChild(k)
         for pid in [k for k in self.peds if k not in live]:
             self.peds.pop(pid)[0].removeNode()
+        self.shown["peds"] = shown
 
 
 def setup_lights(render: NodePath) -> None:

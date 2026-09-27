@@ -39,6 +39,8 @@ class State:
     lock: threading.RLock = field(default_factory=threading.RLock)
     live: str = "{}"
     started: float = field(default_factory=time.time)
+    emulator: object = None
+    _fps_mark: tuple = (0.0, 0)
 
     def build_live(self) -> None:
         w = self.world
@@ -57,6 +59,15 @@ class SignalCommand(BaseModel):
 
 class FaultBody(BaseModel):
     fault: str | None = Field(None, description="black | freeze | offline | noise | null — исправна")
+
+
+class ClearBody(BaseModel):
+    cars: bool = True
+    pedestrians: bool = True
+
+
+class FillBody(BaseModel):
+    per_km: float = Field(25.0, gt=0, le=150, description="машин на километр полосы (умножается на интенсивность)")
 
 
 class ScenarioBody(BaseModel):
@@ -105,10 +116,21 @@ def create_app(st: State) -> FastAPI:
 
     @app.get("/api/info")
     def info():
+        # фактическая частота кадров камер: по счётчику опубликованных кадров с прошлого запроса
+        now = time.monotonic()
+        total = sum((st.hub.get(c) or (0,))[0] for c in st.cams.rigs)
+        t_prev, n_prev = st._fps_mark
+        fps = (total - n_prev) / (now - t_prev) / max(len(st.cams.rigs), 1) if t_prev and now > t_prev else None
+        st._fps_mark = (now, total)
+        em = st.emulator
         return {"name": "Эмулятор участка Люблино", "sim_time_s": round(world.t, 1),
                 "uptime_s": round(time.time() - st.started), "objects": len(net.objects),
                 "cameras": len(st.cams.rigs), "cars": len(world.cars), "pedestrians": len(world.peds),
-                "watchdog_s": st.settings.control.watchdog_s, "camera_fps": st.settings.camera.fps}
+                "cars_rendered": em.agents.shown["cars"] if em else None,
+                "pedestrians_rendered": em.agents.shown["peds"] if em else None,
+                "watchdog_s": st.settings.control.watchdog_s, "camera_fps_target": st.settings.camera.fps,
+                "camera_fps_actual": round(fps, 1) if fps is not None else None,
+                "cars_exited": world.exited}
 
     # ------------------------------------------------------------------ карта
     @app.get("/api/map")
@@ -241,6 +263,18 @@ def create_app(st: State) -> FastAPI:
         if not ok:
             raise HTTPException(409, "въезд занят, повторите через пару секунд")
         return {"ok": True}
+
+    @app.post("/api/traffic/clear")
+    def traffic_clear(body: ClearBody = Body(default_factory=ClearBody)):
+        """Убрать машины и/или пешеходов. Новые продолжают появляться на въездах участка."""
+        with st.lock:
+            return {"removed": world.clear(body.cars, body.pedestrians)}
+
+    @app.post("/api/traffic/fill")
+    def traffic_fill(body: FillBody = Body(default_factory=FillBody)):
+        """Сразу расставить машины по пустым полосам, не дожидаясь, пока они приедут с въездов."""
+        with st.lock:
+            return {"added": world.fill(body.per_km)}
 
     @app.get("/api/scenario")
     def get_scenario():

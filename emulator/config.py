@@ -50,11 +50,14 @@ class CameraSettings:
     k1: float = -0.12
     k2: float = 0.01
     idle_stop_s: float = 5.0   # камеру без зрителей перестаём рендерить через столько секунд
+    msaa: int = 0              # сглаживание рендера (0 — выключено): 2× почти удваивает время рендера
+    render_scale: float = 0.85  # масштаб центра рендера относительно выходного кадра
+    per_pixel_lighting: bool = True
 
 
 @dataclass
 class TrafficSettings:
-    vehicles_per_hour: dict = field(default_factory=lambda: {"secondary": 520, "tertiary": 300})  # на направление
+    vehicles_per_hour: dict = field(default_factory=lambda: {"secondary": 260, "tertiary": 150})  # ×1 — сеть без роста очередей  # на направление
     pedestrians_per_min: float = 2.0      # на переход (у оборудованных объектов)
     other_pedestrians_per_min: float = 0.5  # на переходы обычных перекрёстков
     traffic_scale: float = 1.0
