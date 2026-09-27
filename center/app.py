@@ -211,7 +211,11 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
         jpg = await asyncio.to_thread(hub.render_camera, cam_id, raw)
         if jpg is None:
             raise HTTPException(503, "нет кадров с камеры")
-        return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        served = hub._served.get(cam_id)
+        headers = {"Cache-Control": "no-store"}
+        if served and not raw:
+            headers["X-Frame-Ts"] = f"{served[1]:.3f}"  # время кадра: для проверки, что показ идёт только вперёд
+        return Response(jpg, media_type="image/jpeg", headers=headers)
 
     @app.get("/video/{cam_id}.mjpg")
     async def video(cam_id: str, request: Request):

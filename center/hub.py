@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +64,8 @@ class Hub:
         self._minute = datetime.now().replace(second=0, microsecond=0)
         self._task: asyncio.Task | None = None
         self.started = datetime.now()
+        self._render_lock = threading.Lock()
+        self._served: dict[str, tuple[int, float, bytes]] = {}  # камера -> последний показанный кадр
 
     def start(self) -> None:
         if self.start_io:
@@ -151,17 +154,25 @@ class Hub:
             return None
         rt = self.runtimes[sid]
         stream = rt.streams[cam_id]
-        ov = rt.perception.snapshot_overlay(cam_id)
-        fr = stream.latest()
-        dets = []
-        # рамки рисуем на том же кадре, по которому шло распознавание, если он свежий
-        if ov is not None and fr is not None and fr.ts - ov[0].ts < 1.0 and rt.cam_fault.get(cam_id) is None:
-            fr, dets = ov
-        if fr is None:
+        latest = stream.latest()
+        if latest is None:
             return None
         if raw:  # чистый кадр для редактора зон
-            ok, jpg = cv2.imencode(".jpg", fr.img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            ok, jpg = cv2.imencode(".jpg", latest.img, [cv2.IMWRITE_JPEG_QUALITY, 85])
             return jpg.tobytes() if ok else None
+        # Рамки рисуем на том кадре, по которому шло распознавание: он отстаёт от свежего на 0,3–1 с.
+        # Показ строго вперёд по времени: кадр не старше уже показанного, иначе картинка дёргается назад.
+        ov = rt.perception.snapshot_overlay(cam_id)
+        fr, dets = latest, []
+        if ov is not None and rt.cam_fault.get(cam_id) is None and latest.ts - ov[0].ts < 1.5:
+            fr, dets = ov
+        with self._render_lock:
+            served = self._served.get(cam_id)
+            if served is not None and fr.seq <= served[0]:
+                if latest.seq > served[0] and latest.ts - served[1] > 1.0:
+                    fr, dets = latest, []  # распознавание отстало: вперёд, без рамок
+                else:
+                    return served[2]       # новее показанного пока нет
         img = fr.img.copy()
         cam = next(c for c in rt.cam_models if c.id == cam_id)
         geo = rt.perception.geo
@@ -195,4 +206,13 @@ class Hub:
             cv2.putText(img, "FAULT: " + fault.upper(), (12, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                         (255, 255, 255), 2, cv2.LINE_AA)
         ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
-        return jpg.tobytes() if ok else None
+        if not ok:
+            return None
+        data = jpg.tobytes()
+        with self._render_lock:
+            prev = self._served.get(cam_id)
+            if prev is None or fr.seq > prev[0]:  # параллельный запрос мог уже отдать кадр новее
+                self._served[cam_id] = (fr.seq, fr.ts, data)
+            else:
+                data = prev[2]
+        return data
