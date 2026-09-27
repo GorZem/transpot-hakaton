@@ -17,3 +17,4 @@ node_modules/
 admin/dist/
 data/center.db*
 *.egg-info/
+.claude/
