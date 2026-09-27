@@ -213,10 +213,30 @@ function vehButtons(g) {
   return g.kind === "veh" ? ["green", "green_blink", "yellow", "red", "red_yellow"] : ["green", "green_blink", "red"];
 }
 
+// Кадры камер в интерфейсе запрашиваются по одному (/cam/{id}.jpg): каждый запрос сразу закрывается.
+// Бесконечный MJPEG держит соединение, а браузер открывает к серверу не больше 6 соединений,
+// поэтому после нескольких переключений объектов новые потоки переставали грузиться.
+function playCamera(img, cid) {
+  const token = {};
+  img._play = token;
+  const next = () => {
+    if (!img.isConnected || img._play !== token) return;
+    img.src = `/cam/${cid}.jpg?t=${Date.now()}`;
+  };
+  img.onload = () => { img.parentElement.classList.remove("nosig"); setTimeout(next, 50); };
+  img.onerror = () => { img.parentElement.classList.add("nosig"); setTimeout(next, 1000); };
+  next();
+}
+
+function stopCameras(root) {
+  root.querySelectorAll("img").forEach(img => { img._play = null; img.removeAttribute("src"); });
+}
+
 function renderObj(o) {
+  stopCameras($("#obj"));
   const cams = o.cameras.map(c => `
     <div class="cam" data-cam="${c.id}">
-      <div class="frame">нет изображения<img alt="${c.name}" src="${c.stream_url}"></div>
+      <div class="frame nosig"><span>нет сигнала</span><img alt="${c.name}"></div>
       <div class="cbar"><span class="cname">${c.name}</span>
         ${FAULT_RU.map(([f, t]) => `<button class="fbtn ${f === null ? "ok" : ""} ${c.fault === f ? "on" : ""}" data-f="${f}">${t}</button>`).join("")}
       </div>
@@ -237,19 +257,17 @@ function renderObj(o) {
     <div class="sect"><h3>Сценарии</h3>
       <div class="row"><button class="btn" id="grp">+10 пешеходов</button><button class="btn" id="amb">Скорая через объект</button>
         <button class="btn" id="ov">3D-обзор объекта</button></div>
-      <div class="cam" id="ovbox" hidden><div class="frame"><img alt="3D-обзор"></div></div>
+      <div class="cam" id="ovbox" hidden><div class="frame nosig"><span>нет сигнала</span><img alt="3D-обзор"></div></div>
     </div>
     <div class="sect"><h3>Фактическая обстановка</h3><div class="truth" id="truth"></div></div>
     <div class="sect"><h3>Журнал контроллера</h3><ul class="log" id="log"></ul></div>`;
   $("#obj").querySelectorAll(".cam[data-cam]").forEach(el => {
     const cid = el.dataset.cam;
+    playCamera(el.querySelector("img"), cid);
     el.querySelectorAll(".fbtn").forEach(b => b.onclick = async () => {
       const f = b.dataset.f === "null" ? null : b.dataset.f;
       await api(`/api/cameras/${cid}/fault`, {method: "POST", body: JSON.stringify({fault: f})});
       el.querySelectorAll(".fbtn").forEach(x => x.classList.toggle("on", x === b));
-      const img = el.querySelector("img");
-      img.hidden = f === "offline";
-      if (f !== "offline") img.src = `/cam/${cid}.mjpg?t=${Date.now()}`;
     });
   });
   $("#release").onclick = () => sig(`/api/objects/${o.id}/release`, "POST");
@@ -261,7 +279,8 @@ function renderObj(o) {
   $("#ov").onclick = async () => {
     await api("/api/overview", {method: "POST", body: JSON.stringify({object_id: o.id})});
     const box = $("#ovbox"); box.hidden = !box.hidden;
-    box.querySelector("img").src = box.hidden ? "" : `/cam/overview.mjpg?t=${Date.now()}`;
+    const img = box.querySelector("img");
+    if (box.hidden) stopCameras(box); else playCamera(img, "overview");
   };
   updateObj(o);
 }
