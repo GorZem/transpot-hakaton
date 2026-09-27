@@ -16,6 +16,11 @@ from node.params import Params
 
 EPS = 1e-6  # сравнения времени с запасом на погрешность float
 
+# Константы прежней политики правил (policy="rules"), оставлена для сравнения на модели.
+LEGACY_DELAY_MAX_S = 45.0
+LEGACY_FLOW_SAT_VPH = 1500.0
+LEGACY_GROUP_FACTOR = 0.35
+
 
 @dataclass
 class Transition:
@@ -47,7 +52,11 @@ class ControllerEvent:
 
 
 class Controller:
-    def __init__(self, layout: Layout, params: Params, now: float = 0.0):
+    def __init__(self, layout: Layout, params: Params, now: float = 0.0, policy: str = "cost"):
+        self.policy = policy  # cost — минимум задержки людей; rules — прежние правила (для сравнения)
+        self._pass_until: float | None = None  # до какого момента пропускаем подъезжающую машину
+        self.red_at: dict[str, float] = {g: now for g in layout.veh_groups()}
+        self.queue_since: dict[str, float | None] = {}
         self.L = layout
         self.p = params
         self.mode = Mode.ADAPTIVE
@@ -87,10 +96,12 @@ class Controller:
         """Подхватить управление с устойчивой фазы, в которой объект уже работает по своей программе."""
         self.trans = None
         self.stage, self.stage_t0 = stage, now
+        self._pass_until = None
         st = self.L.stages[stage]
         for g, x in self.L.groups.items():
             if x.kind == "veh":
                 self.signals[g] = Veh.GREEN if g in st.veh else Veh.RED
+                self.red_at[g] = now
             else:
                 self.signals[g] = Ped.GREEN if g in ped_green else Ped.RED
         self.ped_active = set(ped_green)
@@ -105,6 +116,7 @@ class Controller:
 
     # ---------- такт ----------
     def tick(self, now: float, obs: Observation) -> dict[str, str]:
+        self._track_queues(now, obs)
         if self.mode == Mode.FLASHING:
             self.status = "Объект не регулируется: жёлтый мигающий"
         elif self.trans is not None:
@@ -134,6 +146,8 @@ class Controller:
             self.status = "Смена фазы: жёлтый"
             return
         for g in tr.losing_veh:
+            if self.signals[g] != Veh.RED:
+                self.red_at[g] = now
             self.signals[g] = Veh.RED
         if tr.red_at is None:
             tr.red_at = now
@@ -168,6 +182,7 @@ class Controller:
     def _start_stage(self, idx: int, now: float, obs: Observation, reason: str) -> None:
         self.trans = None
         self.stage, self.stage_t0 = idx, now
+        self._pass_until = None
         st = self.L.stages[idx]
         for g in st.veh:
             self.signals[g] = Veh.GREEN
@@ -215,10 +230,10 @@ class Controller:
             return
         if self.mode == Mode.FIXED:
             d = self._decide_fixed(t)
-        elif self.L.kind == "crossing":
-            d = self._decide_crossing(now, obs, t)
+        elif self.policy == "rules":
+            d = (self._legacy_crossing if self.L.kind == "crossing" else self._legacy_intersection)(now, obs, t)
         else:
-            d = self._decide_intersection(now, obs, t)
+            d = self._decide_cost(now, obs, t)
         self.status = d.status or d.reason
         if d.go and now >= earliest - EPS:
             self._switch(d.to if d.to is not None else self._next_stage(obs, now), d.reason, now, obs)
@@ -263,18 +278,163 @@ class Controller:
             return None
         return sum(known) * len(groups) / len(known)
 
-    def _decide_crossing(self, now: float, obs: Observation, t: float) -> Decision:
+    # ---------- решение по задержке людей ----------
+    def _free_time(self, g: str, obs: Observation, R: float, typical: bool = False) -> float:
+        """Сколько секунд к стоп-линии никто не подъедет. По камере — время до ближайшей машины;
+        «обычно» — средний интервал между машинами при текущей интенсивности."""
+        f = obs.flow_vph.get(g)
+        if typical:
+            return R if not f else min(R, 3600 / f)
+        if obs.queue.get(g) is None:
+            return 0.0
+        eta = obs.eta.get(g)
+        if eta is None:  # в зоне видимости (~6 с езды) машин нет: дальше — в среднем через интервал 3600/q
+            return min(R, 6.0 + (3600 / f if f else R))
+        return min(R, eta)
+
+    def veh_cost(self, groups, R: float, obs: Observation, typical: bool = False) -> float:
+        """Человеко-секунды, которые потеряют едущие на зелёный, если остановить их на R секунд:
+        стоящие в очереди ждут всё время R, подъезжающие — в среднем половину оставшегося красного,
+        плюс потери на торможение и разгон каждой остановленной машины."""
+        p = self.p
+        total = 0.0
+        for g in groups:
+            f = obs.flow_vph.get(g)
+            q = (p.fallback_flow_vph if f is None else f) / 3600
+            Q = obs.queue.get(g) or 0
+            lead = p.green_blink_s + p.yellow_s  # столько ещё можно проехать после решения
+            tail = max(0.0, R - max(0.0, self._free_time(g, obs, R + lead, typical) - lead))
+            arrivals = q * tail
+            total += p.veh_occupancy * (Q * R + q * tail * tail / 2 + p.stop_penalty_s * (Q + arrivals))
+        return total
+
+    def red_duration(self, j: int, obs: Observation) -> float:
+        """Сколько простоит на красном транспорт текущей фазы, если включить фазу j."""
+        p, st = self.p, self.L.stages[j]
+        return (p.all_red_s + (p.red_yellow_s if st.veh else 0) + self.planned_green(j, obs)
+                + (p.green_blink_s + p.yellow_s if st.veh else p.ped_blink_s) + p.all_red_s + p.red_yellow_s)
+
+    def planned_green(self, j: int, obs: Observation) -> float:
+        p, st = self.p, self.L.stages[j]
+        if st.ped_only:  # мигание пешеходного добавляется в red_duration
+            return max((self.ped_green_duration(g, obs) for g in st.ped), default=p.ped_min_green_s)
+        peds = [self.ped_green_duration(g, obs) + p.ped_blink_s for g in st.ped if (obs.waiting.get(g) or 0) > 0]
+        clear = max(((obs.queue.get(g) or 0) * p.headway_s for g in st.veh), default=0.0)
+        return max([p.veh_min_green_s, clear] + peds)
+
+    def wait_cost(self, j: int, obs: Observation, now: float) -> float:
+        """Накопленное ожидание тех, кого обслужит фаза j, в человеко-секундах."""
+        p, st = self.p, self.L.stages[j]
+        w = 0.0
+        for g in st.ped:
+            n = obs.waiting.get(g)
+            if n is None:  # зона не видна: как будто один человек ждёт с момента планового вызова
+                w += p.ped_weight * max(0.0, now - self.last_served[g] - p.blind_call_s)
+            else:
+                ws = obs.wait_sum.get(g)
+                w += p.ped_weight * (ws if ws is not None else n * (obs.max_wait.get(g) or 0) / 2)
+        for g in st.veh:
+            red = now - self.red_at.get(g, now)
+            Q = obs.queue.get(g)
+            if Q is None:  # подход не виден: очередь по оценке потока
+                Q = round(p.fallback_flow_vph / 3600 * red)
+                waited = red
+            else:  # машины ждут с момента, когда встала первая из очереди
+                since = self.queue_since.get(g)
+                waited = now - max(self.red_at.get(g, now), now if since is None else since)
+            w += p.veh_occupancy * Q * waited / 2
+            eta = obs.eta.get(g)
+            to_green = p.green_blink_s + p.yellow_s + p.all_red_s + p.red_yellow_s
+            if eta is not None and to_green - 2 <= eta <= to_green + 8:
+                w += p.veh_occupancy * (p.stop_penalty_s + p.veh_min_green_s / 2)
+        return w
+
+    def _track_queues(self, now: float, obs: Observation) -> None:
+        for g in self.L.veh_groups():
+            if (obs.queue.get(g) or 0) > 0:
+                if self.queue_since.get(g) is None:
+                    self.queue_since[g] = now
+            else:
+                self.queue_since[g] = None
+
+    def _decide_cost(self, now: float, obs: Observation, t: float) -> Decision:
+        p, st = self.p, self.L.stages[self.stage]
+        q_all = self.flow_estimate(obs, st.veh)
+        gmin = p.veh_min_green_empty_s if (q_all is not None and q_all < p.empty_road_vph) else p.veh_min_green_s
+        cands = [j for j in range(len(self.L.stages)) if j != self.stage and self._stage_demand(j, obs, now)]
+        rows = []
+        for j in cands:
+            R = self.red_duration(j, obs)
+            C = self.veh_cost(st.veh, R, obs)
+            # удобный момент: если сейчас переключиться дешевле обычного, порог снижается на величину экономии
+            thr = max(0.0, 2 * C - self.veh_cost(st.veh, R, obs, typical=True))
+            rows.append((j, self.wait_cost(j, obs, now), thr, R, C))
+        row = max(rows, key=lambda r: r[1] - r[2], default=None)
+        best = row[0] if row else None
+        peds = [g for j in cands for g in self.L.stages[j].ped]
+        n_wait = sum(obs.waiting.get(g) or 0 for g in peds)
+        w_max = max((obs.max_wait.get(g) or 0 for g in peds), default=0.0)
+        self.info = {"flow_vph": None if q_all is None else round(q_all), "min_green_s": gmin, "green_s": round(t),
+                     "waiting": n_wait, "max_wait_s": round(w_max, 1),
+                     "wait_cost": None if row is None else round(row[1]),
+                     "switch_cost": None if row is None else round(row[4]),
+                     "threshold": None if row is None else round(row[2]),
+                     "red_s": None if row is None else round(row[3], 1),
+                     "candidate": None if best is None else self.L.stages[best].title,
+                     "group": n_wait >= p.group_threshold}
+        if t < gmin - EPS:
+            return Decision(False, status=f"Минимальный зелёный {gmin:.0f} с")
+        if obs.emergency & set(st.veh):
+            return Decision(False, status="Удержание: приближается спецтранспорт")
+        for j in cands:
+            if obs.emergency & set(self.L.stages[j].veh):
+                return Decision(True, j, "приоритет спецтранспорту")
+        if row is None:
+            return Decision(False, status="Других запросов нет: зелёный остаётся")
+        _, W, C, R, C_now = row
+        nxt = self.L.stages[best]
+        for g in nxt.ped:  # предельное ожидание — страховка поверх расчёта
+            if (obs.waiting.get(g) or 0) and (obs.max_wait.get(g) or 0) >= p.max_wait_s - EPS:
+                return Decision(True, best, f"пешеходы ждут предельные {p.max_wait_s:.0f} с")
+        for g in nxt.ped:  # плановый вызов для невидимых пешеходов
+            if obs.waiting.get(g) is None and now - self.last_served[g] >= p.blind_call_s:
+                return Decision(True, best, f"пешеходы не видны: плановый вызов раз в {p.blind_call_s:.0f} с")
+        if nxt.ped_only and w_max < p.delay_min_s:
+            return Decision(False, status=f"Ждут {n_wait} чел., минимальная задержка {p.delay_min_s:.0f} с")
+        if not nxt.ped_only and t >= p.veh_max_green_s - EPS:
+            return Decision(True, best, f"максимальный зелёный {p.veh_max_green_s:.0f} с")
+        if not nxt.ped_only and all(obs.queue.get(g) == 0 and (obs.eta.get(g) is None or obs.eta.get(g) > p.gap_s) for g in st.veh):
+            # на перекрёстке пустой зелёный — потерянное время для другой улицы
+            return Decision(True, best, "зелёным никто не пользуется: машин на подходах нет")
+        if W >= C:
+            # одиночную машину, которая вот-вот проедет, выгоднее пропустить, чем остановить
+            # скорость роста ожидания: каждый ждущий пешеход и каждый человек в стоящей машине
+            rate = p.ped_weight * n_wait + p.veh_occupancy * sum(obs.queue.get(g) or 0 for g in nxt.veh)
+            for g in st.veh:
+                eta, Q = obs.eta.get(g), obs.queue.get(g)
+                if Q == 0 and eta is not None and eta <= p.lookahead_s and                         p.veh_occupancy * (R - eta + p.stop_penalty_s) > max(rate, p.ped_weight) * (eta + 1):
+                    if self._pass_until is None:
+                        self._pass_until = now + eta + 1
+                    if now < self._pass_until:
+                        return Decision(False, status=f"Пропускаем подъезжающую машину ({eta:.0f} с до стоп-линии)")
+            gap = " (удобный момент: разрыв в потоке)" if C < C_now - 0.5 else ""
+            return Decision(True, best, f"ожидание {W:.0f} чел·с ≥ порога {C:.0f} чел·с{gap}")
+        who = f"ждут {n_wait} чел." if n_wait else "ждут машины"
+        return Decision(False, status=f"{nxt.title}: {who}, накоплено {W:.0f} из {C:.0f} чел·с")
+
+    # ---------- прежние правила (policy="rules"), для сравнения ----------
+    def _legacy_crossing(self, now: float, obs: Observation, t: float) -> Decision:
         p, st = self.p, self.L.stages[self.stage]
         ped_stage = next(i for i, s in enumerate(self.L.stages) if s.ped_only)
         cw = self.L.stages[ped_stage].ped[0]
         q = self.flow_estimate(obs, st.veh) or 0.0
         blind = any(obs.flow_vph.get(g) is None for g in st.veh)
         gmin = p.veh_min_green_empty_s if q < p.empty_road_vph else p.veh_min_green_s
-        D = p.delay_min_s + (p.delay_max_s - p.delay_min_s) * min(1.0, q / p.flow_sat_vph)
+        D = p.delay_min_s + (LEGACY_DELAY_MAX_S - p.delay_min_s) * min(1.0, q / LEGACY_FLOW_SAT_VPH)
         n = obs.waiting.get(cw)
         wait = obs.max_wait.get(cw) or 0.0
         group = n is not None and n >= p.group_threshold
-        d_eff = max(p.delay_min_s, D * p.group_factor) if group else D
+        d_eff = max(p.delay_min_s, D * LEGACY_GROUP_FACTOR) if group else D
         etas = [obs.eta.get(g) for g in st.veh]
         queues = [obs.queue.get(g) for g in st.veh]
         gap = (not blind and all(e is None or e > p.gap_s for e in etas) and all((x or 0) == 0 for x in queues))
@@ -300,7 +460,7 @@ class Controller:
             return Decision(True, ped_stage, f"предельное ожидание {p.max_wait_s:.0f} с")
         return Decision(False, status=f"Ждут {n} чел., {wait:.0f} из {d_eff:.0f} с{' (группа)' if group else ''}")
 
-    def _decide_intersection(self, now: float, obs: Observation, t: float) -> Decision:
+    def _legacy_intersection(self, now: float, obs: Observation, t: float) -> Decision:
         p, st = self.p, self.L.stages[self.stage]
         q_all = self.flow_estimate(obs, self.L.veh_groups())
         gmin = p.veh_min_green_empty_s if (q_all is not None and q_all < p.empty_road_vph) else p.veh_min_green_s

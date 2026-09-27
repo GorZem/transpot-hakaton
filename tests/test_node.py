@@ -64,14 +64,19 @@ def test_every_pedestrian_group_gets_green(kind):
     L = build_layout(SITES[KINDS[kind]])
     c = Controller(L, Params(), 0.0)
     served: set[str] = set()
+    arrived = {g: 0.0 for g in L.ped_groups()}
     t = 0.0
     for _ in range(3000):
         o = Observation(queue={g: 2 for g in L.veh_groups()}, eta={g: 2.0 for g in L.veh_groups()},
                         flow_vph={g: 600 for g in L.veh_groups()})
-        for g in L.ped_groups():
-            o.waiting[g], o.max_wait[g], o.on_crosswalk[g] = 2, 30.0, 0
+        for g in L.ped_groups():  # двое ждут с момента прихода, ожидание растёт
+            w = t - arrived[g]
+            o.waiting[g], o.max_wait[g], o.wait_sum[g], o.on_crosswalk[g] = 2, w, 2 * w, 0
         sig = c.tick(t, o)
-        served |= {g for g in L.ped_groups() if sig[g] == Ped.GREEN}
+        for g in L.ped_groups():
+            if sig[g] == Ped.GREEN:
+                served.add(g)
+                arrived[g] = t
         t = round(t + 0.1, 6)
     assert served == set(L.ped_groups())
 
@@ -216,3 +221,69 @@ def test_perception_hides_zones_of_failed_camera():
     assert all(v is None for v in obs.waiting.values()) and all(v is None for v in obs.queue.values())
     obs = per.refresh(0.0, {cams[0].id})
     assert any(v is not None for v in obs.waiting.values())
+
+
+# ---------- алгоритм «минимум задержки людей» ----------
+def _time_to_ped_green(n: int, vph: float, queue: int, eta: float | None, kind: str = "crossing") -> float:
+    """Через сколько секунд после прихода n пешеходов им загорится зелёный."""
+    L = build_layout(SITES[KINDS[kind]])
+    c = Controller(L, Params(), 0.0)
+    veh = dict(queue={g: queue for g in L.veh_groups()}, eta={g: eta for g in L.veh_groups()},
+               flow_vph={g: vph for g in L.veh_groups()})
+    t = 0.0
+    while t < 30:  # запуск, транспорт в зелёном
+        c.tick(t, Observation(waiting={g: 0 for g in L.ped_groups()}, max_wait={g: 0 for g in L.ped_groups()},
+                              wait_sum={g: 0 for g in L.ped_groups()}, **veh))
+        t = round(t + 0.1, 6)
+    arrive = t
+    g0 = L.ped_groups()[0]
+    while c.signals[g0] != Ped.GREEN:
+        w = t - arrive
+        c.tick(t, Observation(waiting={g: n for g in L.ped_groups()}, max_wait={g: w for g in L.ped_groups()},
+                              wait_sum={g: n * w for g in L.ped_groups()}, on_crosswalk={g: 0 for g in L.ped_groups()}, **veh))
+        t = round(t + 0.1, 6)
+        assert t - arrive < 120
+    return t - arrive
+
+
+def test_more_people_get_green_sooner():
+    times = [_time_to_ped_green(n, 900, 2, 3.0) for n in (1, 2, 5, 10)]
+    assert times == sorted(times, reverse=True) and times[0] > times[-1] + 20, times
+
+
+def test_denser_traffic_delays_single_pedestrian_but_within_limit():
+    quiet = _time_to_ped_green(1, 200, 0, None)
+    busy = _time_to_ped_green(1, 1200, 4, 1.0)
+    p = Params()
+    assert quiet < 15 and busy > quiet + 20
+    assert busy <= p.max_wait_s + p.green_blink_s + p.yellow_s + p.all_red_s + 0.5
+
+
+def test_lets_single_approaching_car_pass_first():
+    L = build_layout(SITES[KINDS["crossing"]])
+    c = Controller(L, Params(), 0.0)
+    base = dict(queue={"veh": 0}, flow_vph={"veh": 100})
+    t = 0.0
+    while t < 30:
+        c.tick(t, Observation(waiting={"ped": 0}, max_wait={"ped": 0}, wait_sum={"ped": 0}, eta={"veh": None}, **base))
+        t = round(t + 0.1, 6)
+    # пешеход ждёт 5 с, машина в 2 с от стоп-линии: выгоднее пропустить её, чем остановить
+    c.tick(t, Observation(waiting={"ped": 1}, max_wait={"ped": 5}, wait_sum={"ped": 5}, on_crosswalk={"ped": 0},
+                          eta={"veh": 2.0}, **base))
+    assert c.signals["veh"] == Veh.GREEN and "Пропускаем" in c.status
+
+
+def test_intersection_long_red_queue_takes_over():
+    L = build_layout(SITES[KINDS["cross"]])
+    c = Controller(L, Params(), 0.0)
+    t, switched = 0.0, None
+    while t < 120:
+        o = Observation(queue={"veh_A": 0, "veh_B": 6}, eta={"veh_A": 3.0, "veh_B": None},
+                        flow_vph={"veh_A": 500, "veh_B": 500},
+                        waiting={g: 0 for g in L.ped_groups()}, max_wait={g: 0 for g in L.ped_groups()},
+                        wait_sum={g: 0 for g in L.ped_groups()}, on_crosswalk={g: 0 for g in L.ped_groups()})
+        c.tick(t, o)
+        if c.stage == 1 and switched is None:
+            switched = t
+        t = round(t + 0.1, 6)
+    assert switched is not None and switched < 60
