@@ -9,6 +9,7 @@ import numpy as np
 
 from emulator.config import Settings
 from emulator.world.network import LANE_W, Connector, Crosswalk, Lane, Network
+from emulator.world.routing import Router, dkey
 from emulator.world.signals import SignalController
 
 CAR_TYPES = {
@@ -28,7 +29,6 @@ CLOTHES = [(0.15, 0.18, 0.25), (0.35, 0.1, 0.1), (0.2, 0.3, 0.2), (0.6, 0.55, 0.
            (0.5, 0.5, 0.55), (0.7, 0.3, 0.2), (0.25, 0.35, 0.55), (0.8, 0.8, 0.75), (0.45, 0.25, 0.45)]
 
 
-TURN_WEIGHTS = {"straight": 0.75, "right": 0.15, "left": 0.10}
 LAT_SPEED = 1.3        # поперечная скорость при перестроении, м/с
 SOLID_ZONE = 15.0      # сплошная перед стоп-линией: перестраиваться нельзя
 VEH_GO = {"green", "green_blink", "flash_yellow", "off"}
@@ -58,7 +58,10 @@ class Car:
         self.lane = lane
         self.s = s
         self.next_conn: Connector | None = None
-        self.route: deque = deque()
+        self.path: deque = deque()     # маршрут: участки улиц до выезда
+        self.dest = None               # выезд
+        self.visited: set = set()
+        self.next_key = None
         self.target_arm = None        # куда едем на ближайшем узле
         self.turn = "straight"
         self.desired: list = []       # полосы, из которых возможен нужный манёвр
@@ -130,6 +133,7 @@ class World:
                 n.kind = "priority"  # слияние проезжих частей одной улицы — без светофора
         self.by_object = {oid: node.signal for oid, node in net.objects.items()}
         self.entries = [l for l in net.lanes if l.from_node.kind == "end"]
+        self.router = Router(net, self.rng)
         self.containers = list(net.lanes) + list(net.connectors)
         self.crossed_red = 0
         self.exited = 0      # машин проехало участок
@@ -160,7 +164,7 @@ class World:
                 kind = "bus" if r < 0.06 else "truck" if r < 0.1 else "car"
                 self.add_car(lane, kind)
 
-    def add_car(self, lane: Lane, kind: str, route: list | None = None) -> Car | None:
+    def add_car(self, lane: Lane, kind: str, via=None) -> Car | None:
         tail = lane.cars[-1] if lane.cars else None
         L = CAR_TYPES[kind][0]
         if tail and tail.s - tail.length < L + 3:
@@ -170,44 +174,72 @@ class World:
         if tail and tail.s - tail.length < 60:
             v = min(v, tail.v)
         car = Car(kind, lane, min(L, tail.s - tail.length - 3) if tail and kind == "emergency" else L, v, self.rng)
-        if route:
-            car.route = deque(route)
         lane.cars.append(car)
         self.cars.append(car)
+        k = dkey(lane)
+        car.visited = {k}
+        if via is not None:  # скорая: через объект, дальше к выезду
+            path, last = self.router.route(k, target_node=via)
+            if last is None:
+                lane.cars.remove(car)
+                self.cars.remove(car)
+                return None
+            rest, car.dest = self.router.route(last, visited=set(path) | {k})
+            car.path = deque(path + rest)
+        else:
+            path, car.dest = self.router.route(k)
+            car.path = deque(path)
         self._plan(car)
         return car
 
     def _plan(self, car: Car) -> None:
-        """На въезде в полосу: выбрать манёвр на ближайшем узле и полосы, из которых он возможен."""
+        """На въезде в полосу: следующий участок маршрута, манёвр к нему и полосы, из которых он возможен."""
         lane = car.lane
-        if car.route:
-            if car.route[0] in lane.out:
-                car.next_conn = car.route.popleft()
-                car.target_arm, car.turn, car.desired = car.next_conn.arm_out, car.next_conn.turn, [lane]
-                return
-            car.route.clear()
         node = lane.to_node
         sib = lane.siblings or [lane]
         if node.kind == "end":
-            car.target_arm, car.turn, car.desired, car.next_conn = None, "straight", list(sib), None
+            car.target_arm, car.turn, car.desired, car.next_conn, car.next_key = None, "straight", list(sib), None, None
             return
-        if node.degree <= 2:
-            car.target_arm, car.turn = None, "straight"
-            car.desired = [l for l in sib if l.out] or [lane]
-        else:
-            arms = {}
-            for l in sib:
-                for c in l.out:
-                    arms[id(c.arm_out)] = (c.arm_out, c.turn)
-            options = list(arms.values())
-            arm, turn = self.rng.choices(options, weights=[TURN_WEIGHTS[t] for _, t in options])[0]
-            car.target_arm, car.turn = arm, turn
-            car.desired = [l for l in sib if any(c.arm_out is arm for c in l.out)] or [lane]
+        k = dkey(lane)
+        trans = self.router.trans.get(k, {})
+        if car.path and car.path[0] in trans and self._lane_change_cost(car)(car.path[0]) >= 120:
+            car.path = deque()  # до нужной полосы не успеть перестроиться: другой маршрут
+        if not car.path or car.path[0] not in trans:
+            path, car.dest = self.router.route(k, dest=car.dest, visited=car.visited,
+                                               first_cost=self._lane_change_cost(car))
+            if not path:  # выезда не найти (не должно случаться): любой манёвр
+                path = [self.rng.choice(list(trans))] if trans else []
+            car.path = deque(path)
+        nk = car.path[0] if car.path else None
+        car.next_key = nk
+        if nk is None:
+            car.target_arm, car.turn, car.desired, car.next_conn = None, "straight", [lane], None
+            return
+        car.turn, car.target_arm = trans[nk]
+        car.desired = [l for l in sib if any(dkey(c.to_lane) == nk for c in l.out)] or [lane]
         car.next_conn = self._conn_for(car)
+
+    def _lane_change_cost(self, car: Car):
+        """Штраф за первый манёвр маршрута: если до сплошной мало места для перестроений в нужную
+        полосу, лучше манёвр, доступный из текущей полосы."""
+        lane = car.lane
+        room = lane.length - SOLID_ZONE - car.s
+        mine = {dkey(c.to_lane) for c in lane.out}
+
+        def cost(nk):
+            if nk in mine:
+                return 0.0
+            idx = [l.index for l in (lane.siblings or [lane]) if any(dkey(c.to_lane) == nk for c in l.out)]
+            if not idx:
+                return 0.0
+            need = min(abs(i - lane.index) for i in idx)
+            per = room / need if need else 1e9
+            return 0.0 if per > 60 else 15.0 if per > 30 else 120.0
+        return cost
 
     def _conn_for(self, car: Car):
         lane = car.lane
-        opts = [c for c in lane.out if car.target_arm is None or c.arm_out is car.target_arm]
+        opts = [c for c in lane.out if car.next_key is None or dkey(c.to_lane) == car.next_key]
         if not opts:
             return None
         if len(opts) == 1:
@@ -369,7 +401,7 @@ class World:
 
     def _lane_change(self, car: Car, lane: Lane, dist: float) -> None:
         """Перестроение в полосу нужного манёвра; в заканчивающейся полосе — обязательное, «застёжкой»."""
-        if car.lat or self.t < car.lc_next or car.kind == "emergency" and car.route:
+        if car.lat or self.t < car.lc_next:
             return
         car.lc_next = self.t + 0.3
         if lane in car.desired or not car.desired:
@@ -448,8 +480,9 @@ class World:
                         if car.next_conn is None and cont.out and dist < SOLID_ZONE:
                             # не успел перестроиться: едет туда, куда ведёт его полоса
                             conn = self.rng.choice(cont.out)
-                            self.reroutes += 1
+                            self.reroutes += 1  # маршрут пересчитается на следующем участке
                             car.target_arm, car.turn, car.next_conn = conn.arm_out, conn.turn, conn
+                            car.next_key, car.path = dkey(conn.to_lane), deque()
                         if dist > -0.5 and self._must_stop(car, cont, dist):
                             acc = min(acc, idm(car.v, car.v0, dist + 1.5, car.v))
                 if isinstance(cont, Connector) and cont.conflicts:
@@ -503,6 +536,10 @@ class World:
             car.y_dec = None
             car.stopped = False
             cont.to_lane.cars.append(car)
+            k = dkey(cont.to_lane)
+            car.visited.add(k)
+            if car.path and car.path[0] == k:
+                car.path.popleft()
             self._plan(car)
 
     def clear(self, cars: bool = True, peds: bool = True) -> dict:
@@ -538,6 +575,7 @@ class World:
                 car = Car(kind, lane, s, CAR_TYPES[kind][3] * 0.6, self.rng)
                 lane.cars.append(car)
                 self.cars.append(car)
+                car.visited = {dkey(lane)}
                 self._plan(car)
                 added += 1
                 s -= max(car.length + 8, spacing * self.rng.uniform(0.6, 1.4))
@@ -660,30 +698,9 @@ class World:
         starts = list(self.entries)
         self.rng.shuffle(starts)
         for lane in starts:
-            route = self._route(lane, target)
-            if route is not None and self.add_car(lane, "emergency", route):
+            if self.add_car(lane, "emergency", via=target):
                 return True
         return False
-
-    def _route(self, lane: Lane, target) -> list | None:
-        prev = {lane: None}
-        q = deque([lane])
-        while q:
-            cur = q.popleft()
-            if cur.to_node is target:
-                path, x = [], cur
-                while prev[x] is not None:
-                    conn, x = prev[x]
-                    path.append(conn)
-                path.reverse()
-                if cur.out:
-                    path.append(self.rng.choice([c for c in cur.out if c.turn == "straight"] or cur.out))
-                return path
-            for c in cur.out:
-                if c.to_lane not in prev:
-                    prev[c.to_lane] = (c, cur)
-                    q.append(c.to_lane)
-        return None
 
     def update_poses(self) -> None:
         for c in self.cars:

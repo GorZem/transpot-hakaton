@@ -85,6 +85,7 @@ class Settings:
     port: int = 8100
     sim_dt: float = 0.05
     render_hz: float = 30.0
+    threaded_render: bool = False  # многопоточный конвейер Panda3D (Cull/Draw): прироста не даёт
     camera: CameraSettings = field(default_factory=CameraSettings)
     traffic: TrafficSettings = field(default_factory=TrafficSettings)
     control: ControlSettings = field(default_factory=ControlSettings)

@@ -7,8 +7,10 @@ import traceback
 from collections import defaultdict
 
 
-def configure_panda(window: bool) -> None:
+def configure_panda(window: bool, threaded: bool = False) -> None:
     from panda3d.core import loadPrcFileData
+    if threaded:  # подготовка сцены и отрисовка в отдельных потоках Panda3D
+        loadPrcFileData("", "threading-model Cull/Draw")
     loadPrcFileData("", "\n".join([
         "window-type " + ("onscreen" if window else "offscreen"),
         "window-title Эмулятор участка Люблино",
@@ -23,8 +25,10 @@ def configure_panda(window: bool) -> None:
 
 
 class Emulator:
-    def __init__(self, s, window: bool = False, always_on: bool = True, warmup: float = 180.0, log=print):
-        configure_panda(window)
+    def __init__(self, s, window: bool = False, always_on: bool = True, warmup: float = 180.0, log=print,
+                 threaded: bool | None = None):
+        threaded = s.threaded_render if threaded is None else threaded
+        configure_panda(window, threaded)
         from direct.showbase.ShowBase import ShowBase
 
         from emulator.render import scene
@@ -46,7 +50,7 @@ class Emulator:
         self.base = base = ShowBase()
         base.setBackgroundColor(0.72, 0.8, 0.88, 1)
         self.hub = FrameHub()
-        self.cams = CameraManager(base, self.net, s.camera, self.hub, always_on=always_on)
+        self.cams = CameraManager(base, self.net, s.camera, self.hub, always_on=always_on, threaded=threaded)
         self.cams.labeler = Labeler(self.world, self.cams.dist, s.camera)
         # зона видимости камер: там полная детализация, вне её — упрощённая карта и скрытые модели
         self.vis = Visibility(self.cams.specs, s.camera, self.cams.dist.hfov_out)
@@ -68,6 +72,13 @@ class Emulator:
             OrbitCamera(base, ((x0 + x1) / 2, (y0 + y1) / 2), yaw=20, pitch=50, dist=900,
                         objects=[(float(n.xy[0]), float(n.xy[1])) for n in self.net.objects.values()])
             log("    3D-окно: ЛКМ — поворот и наклон, ПКМ — сдвиг, колесо — масштаб, 1–0 — объекты, R — общий вид")
+            self._win_skip = 0
+
+            def throttle_window(task):  # 3D-окно только для показа: 15 кадр/с, остальное — камерам
+                self._win_skip ^= 1
+                base.win.setActive(self._win_skip == 0)
+                return task.cont
+            base.taskMgr.add(throttle_window, "window-throttle", sort=45)
         self.acc = 0.0
         self.last = time.monotonic()
         self.perf = defaultdict(float)  # накопленное время по этапам, с

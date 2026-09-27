@@ -273,10 +273,11 @@ def build_static(root: NodePath, net: Network, rng: random.Random, vis=None) -> 
 
 # ---------------------------------------------------------------------------------------------- светофоры
 class Lamp:
-    __slots__ = ("np", "sc", "group", "color")
+    __slots__ = ("np", "sc", "group", "color", "lit")
 
     def __init__(self, np_, sc, group, color):
         self.np, self.sc, self.group, self.color = np_, sc, group, color
+        self.lit = None
 
 
 LAMP_ON = {"r": (1.0, 0.12, 0.08), "y": (1.0, 0.75, 0.05), "g": (0.1, 1.0, 0.45)}
@@ -477,6 +478,8 @@ def make_lamp_proto() -> NodePath:
 def update_lamps(lamps: list[Lamp], t: float) -> None:
     blink = (t % 1.0) < 0.5
     for lp in lamps:
-        st = lp.sc.groups[lp.group].state
-        col = LAMP_ON[lp.color] if lamp_on(lp.color, st, blink) else LAMP_OFF[lp.color]
-        lp.np.setColor(*col, 1)
+        on = lamp_on(lp.color, lp.sc.groups[lp.group].state, blink)
+        if on is not lp.lit:  # менять состояние сцены только при смене сигнала
+            lp.lit = on
+            col = LAMP_ON[lp.color] if on else LAMP_OFF[lp.color]
+            lp.np.setColor(col[0], col[1], col[2], 1)

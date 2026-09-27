@@ -337,7 +337,7 @@ def build_vehicle(kind: str, style: str | None, paint) -> tuple[NodePath, NodePa
     mat = Material()
     mat.setSpecular((0.55, 0.55, 0.55, 1))
     mat.setShininess(45)
-    b.setMaterial(mat)
+    root.setMaterial(mat)  # один материал на всю машину: кузов и детали склеиваются в одну геометрию
     if not paint_node:
         b.setColorScale(1, 1, 1, 1)
     return root, b, bar

@@ -121,6 +121,8 @@ class Rig:
     last_capture: float = 0.0
     fault: str | None = None
     rendering: bool = False
+    busy: bool = False               # предыдущий кадр ещё обрабатывается в фоновом потоке
+    frame_no: int = 0                # номер кадра цикла, в котором камера поставлена на рендер
     labels: list | None = None      # разметка кадра, который сейчас рендерится
     labels_meta: dict | None = None
 
@@ -177,14 +179,17 @@ class FrameHub:
 
 
 class CameraManager:
-    def __init__(self, base, net: Network, cs: CameraSettings, hub: FrameHub, always_on: bool = False):
+    def __init__(self, base, net: Network, cs: CameraSettings, hub: FrameHub, always_on: bool = False,
+                 threaded: bool = False):
         self.base, self.net, self.cs, self.hub = base, net, cs, hub
+        # в многопоточном конвейере Panda3D кадр готов в памяти на один кадр цикла позже
+        self.lag = 2 if threaded else 1
         self.always_on = always_on
         self.dist = Distortion(cs)
         self.specs = place_cameras(net, cs.mount_height_m)
         self.rigs: dict[str, Rig] = {}
         self.pending: list[Rig] = []
-        self.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cam")
+        self.pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="cam")
         self.frozen: dict[str, bytes] = {}
         self.labeler = None  # emulator.render.labels.Labeler, задаётся при запуске
         for sp in self.specs:
@@ -252,26 +257,33 @@ class CameraManager:
     # ------------------------------------------------------------ каждый кадр
     def update(self, now: float, sim_t: float) -> None:
         stamp = datetime.now()
+        from panda3d.core import ClockObject
+        fc = ClockObject.getGlobalClock().getFrameCount()
+        still = []
         for rig in self.pending:
-            raw = rig.tex.getRamImage()  # без перекодировки: BGR или BGRA как лежит в текстуре
-            rig.buffer.setActive(False)
+            if fc - rig.frame_no >= 1:
+                rig.buffer.setActive(False)  # один раз отрендерили — хватит
+            if fc - rig.frame_no < self.lag:
+                still.append(rig)
+                continue
             rig.rendering = False
+            raw = rig.tex.getRamImage()  # ссылка на кадр в памяти, без копирования в основном потоке
             if not raw:
                 continue
-            h, w = rig.tex.getYSize(), rig.tex.getXSize()
-            ch = rig.tex.getNumComponents()
-            arr = np.array(memoryview(raw), dtype=np.uint8, copy=True).reshape(h, w, ch)  # одна быстрая копия
-            self.pool.submit(self._process, rig, arr, stamp, rig.labels, rig.labels_meta)
+            rig.busy = True
+            self.pool.submit(self._process, rig, raw, (rig.tex.getYSize(), rig.tex.getXSize(), rig.tex.getNumComponents()),
+                             stamp, rig.labels, rig.labels_meta)
             rig.labels = rig.labels_meta = None
-        self.pending = []
+        self.pending = still
         period = 1.0 / self.cs.fps
         for rig in list(self.rigs.values()) + [self.overview]:
             cid = rig.spec.id
             if not (self.always_on and cid != "overview") and not self.hub.wanted(cid, self.cs.idle_stop_s):
                 continue
-            if now - rig.last_capture < period:
+            if now - rig.last_capture < period or rig.busy or rig.rendering:
                 continue
-            rig.last_capture = now
+            # расписание без накопления ошибки: следующий кадр через период от запланированного момента
+            rig.last_capture = now if now - rig.last_capture > 2 * period else rig.last_capture + period
             if rig.fault == "offline":
                 continue
             if rig.fault == "freeze" and cid in self.frozen:
@@ -287,17 +299,23 @@ class CameraManager:
                 rig.labels_meta = {"sim_time_s": round(sim_t, 2), "fault": rig.fault}
             rig.buffer.setActive(True)
             rig.rendering = True
+            rig.frame_no = fc
             self.pending.append(rig)
 
-    def _process(self, rig: Rig, arr: np.ndarray, stamp: datetime, labels=None, meta=None) -> None:
+    def _process(self, rig: Rig, raw, shape, stamp: datetime, labels=None, meta=None) -> None:
+        """Фоновый поток: перекладка в широкоугольный кадр, неисправности, подпись, JPEG."""
         try:
             cid = rig.spec.id
-            if arr.shape[2] == 4:
-                arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+            arr = np.frombuffer(memoryview(raw), dtype=np.uint8).reshape(shape)
             if cid == "overview":
                 img = cv2.flip(arr, 0)
             else:
                 img = cv2.remap(arr, self.dist.map_x, self.dist.map_y, cv2.INTER_LINEAR)
+            del raw, arr  # кадр в памяти текстуры больше не нужен
+            rig.busy = False
+            if img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)  # после перекладки: пикселей меньше
+            if cid != "overview":
                 if rig.fault == "black":
                     img = np.zeros_like(img)
                 elif rig.fault == "noise":
@@ -311,6 +329,7 @@ class CameraManager:
                     self.frozen[cid] = data
                 self.hub.publish(cid, data, labels, meta)
         except Exception as e:  # поток камеры не должен падать
+            rig.busy = False
             print("camera", rig.spec.id, e)
 
     @staticmethod
