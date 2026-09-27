@@ -1,0 +1,394 @@
+{
+  "district": "Люблино, Москва",
+  "source": "OpenStreetMap (ODbL)",
+  "sites": [
+    {
+      "id": "p-krasnodonskaya-south",
+      "kind": "crossing",
+      "title": "Переход на Краснодонской у ул. Судакова",
+      "lat": 55.67288,
+      "lon": 37.74887,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица",
+        "улица Судакова"
+      ],
+      "road_bearing_deg": 2.2,
+      "addresses": [
+        {
+          "address": "улица Судакова, 17",
+          "distance_m": 85
+        },
+        {
+          "address": "улица Судакова, 11 с2",
+          "distance_m": 88
+        },
+        {
+          "address": "улица Судакова, 11",
+          "distance_m": 107
+        },
+        {
+          "address": "улица Судакова, 11А",
+          "distance_m": 110
+        },
+        {
+          "address": "Краснодонская улица, 47",
+          "distance_m": 110
+        },
+        {
+          "address": "Краснодонская улица, 49/17",
+          "distance_m": 136
+        }
+      ]
+    },
+    {
+      "id": "p-krasnodonskaya-mid",
+      "kind": "crossing",
+      "title": "Переход на Краснодонской, середина квартала",
+      "lat": 55.67436,
+      "lon": 37.74897,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица"
+      ],
+      "road_bearing_deg": 2.2,
+      "addresses": [
+        {
+          "address": "Краснодонская улица, 39",
+          "distance_m": 43
+        },
+        {
+          "address": "Краснодонская улица, 24",
+          "distance_m": 46
+        },
+        {
+          "address": "улица Судакова, 11 с3",
+          "distance_m": 90
+        },
+        {
+          "address": "Краснодонская улица, 39 с2",
+          "distance_m": 96
+        },
+        {
+          "address": "Краснодонская улица, 24 с2",
+          "distance_m": 112
+        },
+        {
+          "address": "Краснодонская улица, 37",
+          "distance_m": 115
+        }
+      ]
+    },
+    {
+      "id": "p-krasnodonskaya-north",
+      "kind": "crossing",
+      "title": "Переход на Краснодонской у Краснодарской",
+      "lat": 55.67541,
+      "lon": 37.74904,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица"
+      ],
+      "road_bearing_deg": 2.2,
+      "addresses": [
+        {
+          "address": "Краснодонская улица, 24 с2",
+          "distance_m": 59
+        },
+        {
+          "address": "Краснодонская улица, 33",
+          "distance_m": 70
+        },
+        {
+          "address": "Краснодонская улица, 35",
+          "distance_m": 75
+        },
+        {
+          "address": "Краснодонская улица, 39 с2",
+          "distance_m": 78
+        },
+        {
+          "address": "Краснодонская улица, 22",
+          "distance_m": 80
+        },
+        {
+          "address": "Краснодонская улица, 39",
+          "distance_m": 116
+        }
+      ]
+    },
+    {
+      "id": "p-krasnodarskaya",
+      "kind": "crossing",
+      "title": "Переход на Краснодарской у Таганрогской",
+      "lat": 55.67782,
+      "lon": 37.7538,
+      "main_street": "Краснодарская улица",
+      "streets": [
+        "Краснодарская улица",
+        "Таганрогская улица"
+      ],
+      "road_bearing_deg": 64.5,
+      "addresses": [
+        {
+          "address": "Краснодарская улица, 28/15",
+          "distance_m": 59
+        },
+        {
+          "address": "Краснодарская улица, 27/13",
+          "distance_m": 59
+        },
+        {
+          "address": "Таганрогская улица, 18/25",
+          "distance_m": 65
+        },
+        {
+          "address": "Краснодарская улица, 30",
+          "distance_m": 71
+        },
+        {
+          "address": "Таганрогская улица, 16",
+          "distance_m": 100
+        },
+        {
+          "address": "Краснодарская улица, 29",
+          "distance_m": 105
+        }
+      ]
+    },
+    {
+      "id": "p-stavropolskaya",
+      "kind": "crossing",
+      "title": "Переход на Ставропольской у Таганрогской",
+      "lat": 55.68125,
+      "lon": 37.75514,
+      "main_street": "Ставропольская улица",
+      "streets": [
+        "Ставропольская улица",
+        "Таганрогская улица"
+      ],
+      "road_bearing_deg": 83.0,
+      "addresses": [
+        {
+          "address": "Ставропольская улица, 28",
+          "distance_m": 38
+        },
+        {
+          "address": "Ставропольская улица, 22",
+          "distance_m": 86
+        },
+        {
+          "address": "Таганрогская улица, 7",
+          "distance_m": 91
+        },
+        {
+          "address": "Таганрогская улица, 10/21",
+          "distance_m": 98
+        },
+        {
+          "address": "Ставропольская улица, 19",
+          "distance_m": 108
+        },
+        {
+          "address": "Ставропольская улица, 21А",
+          "distance_m": 114
+        }
+      ]
+    },
+    {
+      "id": "x-krasnodarskaya-krasnodonskaya",
+      "kind": "cross",
+      "title": "Краснодарская × Краснодонская",
+      "lat": 55.67751,
+      "lon": 37.74918,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица",
+        "Краснодарская улица"
+      ],
+      "road_bearing_deg": 2.9,
+      "addresses": [
+        {
+          "address": "Краснодонская улица, 16А",
+          "distance_m": 71
+        },
+        {
+          "address": "Краснодонская улица, 25",
+          "distance_m": 82
+        },
+        {
+          "address": "Краснодарская улица, 20 к1",
+          "distance_m": 90
+        },
+        {
+          "address": "Краснодарская улица, 21",
+          "distance_m": 91
+        },
+        {
+          "address": "Краснодонская улица, 16/19",
+          "distance_m": 92
+        },
+        {
+          "address": "Краснодонская улица, 27",
+          "distance_m": 115
+        }
+      ]
+    },
+    {
+      "id": "x-krasnodonskaya-stavropolskaya",
+      "kind": "cross",
+      "title": "Краснодонская × Ставропольская",
+      "lat": 55.68089,
+      "lon": 37.74939,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица",
+        "Ставропольская улица"
+      ],
+      "road_bearing_deg": 2.2,
+      "addresses": [
+        {
+          "address": "Краснодонская улица, 12",
+          "distance_m": 34
+        },
+        {
+          "address": "Ставропольская улица, 15",
+          "distance_m": 62
+        },
+        {
+          "address": "Краснодонская улица, 13 к2",
+          "distance_m": 72
+        },
+        {
+          "address": "Ставропольская улица, 18",
+          "distance_m": 76
+        },
+        {
+          "address": "Краснодонская улица, 19 к1",
+          "distance_m": 82
+        },
+        {
+          "address": "Краснодонская улица, 10",
+          "distance_m": 96
+        }
+      ]
+    },
+    {
+      "id": "x-krasnodarskaya-novorossiyskaya",
+      "kind": "cross",
+      "title": "Краснодарская × Новороссийская",
+      "lat": 55.67719,
+      "lon": 37.75931,
+      "main_street": "Новороссийская улица",
+      "streets": [
+        "Новороссийская улица",
+        "Краснодарская улица"
+      ],
+      "road_bearing_deg": 16.4,
+      "addresses": [
+        {
+          "address": "Новороссийская улица, 18/37",
+          "distance_m": 52
+        },
+        {
+          "address": "Краснодарская улица, 44",
+          "distance_m": 57
+        },
+        {
+          "address": "Новороссийская улица, 13",
+          "distance_m": 74
+        },
+        {
+          "address": "Краснодарская улица, 38/20",
+          "distance_m": 76
+        },
+        {
+          "address": "Новороссийская улица, 16 к2",
+          "distance_m": 95
+        },
+        {
+          "address": "Краснодарская улица, 46",
+          "distance_m": 96
+        }
+      ]
+    },
+    {
+      "id": "x-krasnodonskaya-sovkhoznaya",
+      "kind": "cross",
+      "title": "Краснодонская × Совхозная",
+      "lat": 55.67113,
+      "lon": 37.74873,
+      "main_street": "Краснодонская улица",
+      "streets": [
+        "Краснодонская улица",
+        "Совхозная улица"
+      ],
+      "road_bearing_deg": 176.7,
+      "addresses": [
+        {
+          "address": "Совхозная улица, 8 к1",
+          "distance_m": 64
+        },
+        {
+          "address": "Краснодонская улица, 49/17",
+          "distance_m": 71
+        },
+        {
+          "address": "Совхозная улица, 8А",
+          "distance_m": 82
+        },
+        {
+          "address": "Совхозная улица, 8",
+          "distance_m": 101
+        },
+        {
+          "address": "Краснодонская улица, 34",
+          "distance_m": 111
+        },
+        {
+          "address": "Краснодонская улица, 34 к2 с2",
+          "distance_m": 129
+        }
+      ]
+    },
+    {
+      "id": "t-novorossiyskaya-stavropolskaya",
+      "kind": "tee",
+      "title": "Новороссийская × Ставропольская",
+      "lat": 55.68164,
+      "lon": 37.76105,
+      "main_street": "Ставропольская улица",
+      "streets": [
+        "Ставропольская улица",
+        "Новороссийская улица"
+      ],
+      "road_bearing_deg": 84.4,
+      "addresses": [
+        {
+          "address": "Ставропольская улица, 23 с1",
+          "distance_m": 56
+        },
+        {
+          "address": "Совхозная улица, 57",
+          "distance_m": 79
+        },
+        {
+          "address": "Новороссийская улица, 3",
+          "distance_m": 107
+        },
+        {
+          "address": "Ставропольская улица, 23/1",
+          "distance_m": 117
+        },
+        {
+          "address": "Ставропольская улица, 36",
+          "distance_m": 125
+        },
+        {
+          "address": "Новороссийская улица, 3 с1",
+          "distance_m": 133
+        }
+      ]
+    }
+  ]
+}

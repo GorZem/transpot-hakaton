@@ -13,3 +13,7 @@ runs/
 config/local.yaml
 deploy/data/
 reports/replay/
+node_modules/
+admin/dist/
+data/center.db*
+*.egg-info/
