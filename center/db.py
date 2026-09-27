@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_site_ts ON events(site, ts);
 CREATE TABLE IF NOT EXISTS params (site TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS zones (site TEXT PRIMARY KEY, json TEXT NOT NULL);
 """
 
 COLS = ["ped_arrived", "ped_served", "wait_sum", "wait_max", "violations", "groups", "ped_phases",
@@ -75,6 +76,19 @@ class DB:
     def set_params(self, site: str, data: dict) -> None:
         with self.lock:
             self.conn.execute("INSERT OR REPLACE INTO params (site, json) VALUES (?, ?)", (site, json.dumps(data)))
+            self.conn.commit()
+
+    def get_zones(self, site: str) -> dict | None:
+        with self.lock:
+            r = self.conn.execute("SELECT json FROM zones WHERE site = ?", (site,)).fetchone()
+        return json.loads(r["json"]) if r else None
+
+    def set_zones(self, site: str, data: dict | None) -> None:
+        with self.lock:
+            if data:
+                self.conn.execute("INSERT OR REPLACE INTO zones (site, json) VALUES (?, ?)", (site, json.dumps(data)))
+            else:
+                self.conn.execute("DELETE FROM zones WHERE site = ?", (site,))
             self.conn.commit()
 
     # ---------- чтение ----------

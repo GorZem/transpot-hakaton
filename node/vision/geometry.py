@@ -175,6 +175,7 @@ class Approach:
 class SiteGeometry:
     def __init__(self, site: dict):
         self.site = site
+        self.image_zones: ImageZones | None = None
         self.crosswalks: list[CrosswalkZone] = []
         for cw in site.get("crosswalks", []):
             a, b = np.array(cw["a"], float), np.array(cw["b"], float)
@@ -202,21 +203,79 @@ class SiteGeometry:
             self.approaches.append(Approach(arm["street"], group, pts, arm["in_width_m"], stop))
 
     def crosswalk_at(self, p) -> tuple[CrosswalkZone | None, str | None, int | None]:
-        """Где пешеход: ('wait', сторона) у перехода, ('cross', None) на переходе, иначе (None, None)."""
+        """Где пешеход: ('wait', сторона) у перехода, ('cross', None) на переходе, иначе (None, None).
+        Если для зоны нарисован многоугольник на кадре камеры, решает он, иначе расчётная зона в метрах."""
+        iz = self.image_zones
         for cw in self.crosswalks:
-            if point_in_poly(p, cw.band):
+            inside = iz.contains(("crosswalk", cw.id), p) if iz else None
+            if inside if inside is not None else point_in_poly(p, cw.band):
                 return cw, "cross", None
             for side in (0, 1):
-                if point_in_poly(p, cw.wait[side]):
+                inside = iz.contains(("wait", cw.id, side), p) if iz else None
+                if inside if inside is not None else point_in_poly(p, cw.wait[side]):
                     return cw, "wait", side
         return None, None, None
 
     def approach_at(self, p) -> tuple[Approach | None, float]:
-        for ap in self.approaches:
-            ok, s = ap.contains(p)
+        iz = self.image_zones
+        for i, ap in enumerate(self.approaches):
+            inside = iz.contains(("approach", i), p) if iz else None
+            if inside is None:
+                ok, s = ap.contains(p)
+            else:
+                ok, s = inside, ap.locate(p)[0]
             if ok:
                 return ap, s
         return None, 0.0
+
+    # ---------- зоны на кадрах камер ----------
+    def zone_targets(self, site: dict) -> list[dict]:
+        """Все зоны, которые можно разметить на кадре: ключ, тип, подпись."""
+        titles = {g["id"]: g["title"] for g in site.get("signal_groups", [])}
+        out = []
+        for k, cw in enumerate(self.crosswalks, 1):
+            name = titles.get(cw.group, cw.group)
+            if len(self.crosswalks) > 1:
+                name += f", переход {k}"
+            out.append({"key": ["crosswalk", cw.id], "type": "crosswalk", "label": f"Переход · {name}"})
+            for side in (0, 1):
+                out.append({"key": ["wait", cw.id, side], "type": "wait", "label": f"Ожидание · {name} · сторона {side + 1}"})
+        for i, ap in enumerate(self.approaches):
+            b = heading(ap.pts[min(1, len(ap.pts) - 1)] - ap.pts[0])
+            frm = ["с севера", "с северо-востока", "с востока", "с юго-востока", "с юга", "с юго-запада", "с запада", "с северо-запада"][int((b + 22.5) % 360 // 45)]
+            out.append({"key": ["approach", i], "type": "approach", "label": f"Подход · {ap.street} {frm}"})
+        return out
+
+    def ground_zone(self, key) -> np.ndarray:
+        kind = key[0]
+        if kind == "approach":
+            return self.approaches[key[1]].region()
+        cw = next(c for c in self.crosswalks if c.id == key[1])
+        return cw.band if kind == "crosswalk" else cw.wait[key[2]]
+
+    def auto_zones(self, cam: "CameraModel") -> list[dict]:
+        """Стартовая разметка камеры: расчётные зоны, спроецированные в кадр (координаты 0…1)."""
+        out = []
+        for t in self.zone_targets(self.site):
+            poly = self.ground_zone(t["key"])
+            if len(poly) < 3:
+                continue
+            dense = np.concatenate([np.linspace(poly[i], poly[(i + 1) % len(poly)], 24, endpoint=False) for i in range(len(poly))])
+            px, front = cam.ground_to_pixels(dense)
+            px = px[front]
+            if len(px) < 3:
+                continue
+            px[:, 0] = np.clip(px[:, 0], 0, cam.w - 1)
+            px[:, 1] = np.clip(px[:, 1], 0, cam.h - 1)
+            # контур зоны по порядку (не выпуклая оболочка: подход на изогнутой дороге не должен захватывать тротуар)
+            approx = cv2.approxPolyDP(px.astype(np.float32).reshape(-1, 1, 2), 2.5, True).reshape(-1, 2)
+            if len(approx) < 3 or cv2.contourArea(approx) < 150:
+                continue
+            out.append({"key": t["key"], "points": [[round(float(x) / cam.w, 4), round(float(y) / cam.h, 4)] for x, y in approx]})
+        return out
+
+    def set_image_zones(self, cams: list["CameraModel"], zones: dict[str, list[dict]] | None) -> None:
+        self.image_zones = ImageZones(cams, zones) if zones else None
 
     def group_points(self) -> dict[str, list[np.ndarray]]:
         """Контрольные точки зон каждой группы — чтобы понять, какая камера что видит."""
@@ -243,3 +302,30 @@ class SiteGeometry:
 
 def heading(v) -> float:
     return math.degrees(math.atan2(v[0], v[1])) % 360
+
+
+class ImageZones:
+    """Зоны, нарисованные на кадрах камер (координаты 0…1). Точка на земле проецируется в кадр
+    каждой камеры, у которой есть эта зона, и проверяется по многоугольнику."""
+
+    def __init__(self, cams: list[CameraModel], zones: dict[str, list[dict]]):
+        self.by_key: dict[tuple, list[tuple[CameraModel, np.ndarray]]] = {}
+        models = {c.id: c for c in cams}
+        for cid, items in zones.items():
+            cam = models.get(cid)
+            if cam is None:
+                continue
+            for z in items:
+                pts = np.array(z["points"], dtype=np.float32) * np.array([cam.w, cam.h], dtype=np.float32)
+                if len(pts) >= 3:
+                    self.by_key.setdefault(tuple(z["key"]), []).append((cam, pts))
+
+    def contains(self, key: tuple, p) -> bool | None:
+        items = self.by_key.get(tuple(key))
+        if not items:
+            return None
+        for cam, poly in items:
+            px, front = cam.ground_to_pixels(np.asarray(p, dtype=np.float64).reshape(1, 2))
+            if front[0] and cv2.pointPolygonTest(poly, (float(px[0, 0]), float(px[0, 1])), False) >= 0:
+                return True
+        return False

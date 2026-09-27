@@ -53,6 +53,9 @@ class Hub:
             rt = SiteRuntime(s, Params(**saved) if saved else Params(), self.equipment_url)
             if rt.link:
                 rt.link.heartbeat_s = eq.get("heartbeat_s", 5)
+            zones = db.get_zones(sid)
+            if zones:
+                rt.set_zones(zones, log=False)
             self.runtimes[sid] = rt
             for c in s["cameras"]:
                 self.camera_site[c["id"]] = sid
@@ -142,7 +145,7 @@ class Hub:
         self.db.set_params(sid, p.model_dump())
 
     # ---------- видео с разметкой ----------
-    def render_camera(self, cam_id: str) -> bytes | None:
+    def render_camera(self, cam_id: str, raw: bool = False) -> bytes | None:
         sid = self.camera_site.get(cam_id)
         if sid is None:
             return None
@@ -156,6 +159,9 @@ class Hub:
             fr, dets = ov
         if fr is None:
             return None
+        if raw:  # чистый кадр для редактора зон
+            ok, jpg = cv2.imencode(".jpg", fr.img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            return jpg.tobytes() if ok else None
         img = fr.img.copy()
         cam = next(c for c in rt.cam_models if c.id == cam_id)
         geo = rt.perception.geo
@@ -167,15 +173,18 @@ class Hub:
             if front.all():
                 cv2.polylines(img, [px.astype(np.int32)], True, color, thick, cv2.LINE_AA)
 
+        # зоны — так же, как их видит редактор: ручная разметка или автоматическая
+        colors = {}
         for cw in geo.crosswalks:
-            col = SIG_BGR.get(rt.signals.get(cw.group), (200, 200, 200))
-            poly(cw.band, col, 2)
-            for w in cw.wait:
-                poly(w, (230, 90, 200), 1)
-        for ap in geo.approaches:
-            r = ap.region()
-            if len(r):
-                poly(r, SIG_BGR.get(rt.signals.get(ap.group), (200, 200, 200)), 1)
+            colors[("crosswalk", cw.id)] = SIG_BGR.get(rt.signals.get(cw.group), (200, 200, 200))
+            colors[("wait", cw.id, 0)] = colors[("wait", cw.id, 1)] = (230, 90, 200)
+        for i, ap in enumerate(geo.approaches):
+            colors[("approach", i)] = SIG_BGR.get(rt.signals.get(ap.group), (200, 200, 200))
+        h, w = img.shape[:2]
+        for z in rt.zones_for(cam_id)[0]:
+            pts = (np.array(z["points"]) * [w, h]).astype(np.int32)
+            key = tuple(z["key"])
+            cv2.polylines(img, [pts], True, colors.get(key, (200, 200, 200)), 2 if key[0] == "crosswalk" else 1, cv2.LINE_AA)
         for d in dets:
             x1, y1, x2, y2 = (int(v) for v in d.box)
             col = (0, 0, 255) if d.beacon else ((0, 170, 255) if d.kind == VEHICLE else (0, 220, 255))

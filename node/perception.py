@@ -178,11 +178,15 @@ class Perception:
     def _veh(self, tr: Track, up: Update) -> None:
         ap, s = self.geo.approach_at(tr.pos)
         idx = self.geo.approaches.index(ap) if ap else None
-        if idx is not None and idx == tr.approach and tr.s is not None:
-            if tr.s > ap.stop_s >= s:  # пересёк стоп-линию к центру
-                up.passed[ap.group] = up.passed.get(ap.group, 0) + 1
+        if tr.approach is not None and tr.s is not None:
+            prev = self.geo.approaches[tr.approach]
+            # проехал стоп-линию к центру: внутри подхода или вышел из зоны подхода у стоп-линии
+            crossed = (idx == tr.approach and tr.s > prev.stop_s >= s) or                       (idx != tr.approach and prev.stop_s - 0.5 <= tr.s < prev.stop_s + 8 and tr.speed >= STOPPED_MPS)
+            if crossed:
+                up.passed[prev.group] = up.passed.get(prev.group, 0) + 1
                 if tr.stopped:
-                    up.stopped[ap.group] = up.stopped.get(ap.group, 0) + 1
+                    up.stopped[prev.group] = up.stopped.get(prev.group, 0) + 1
+        if idx is not None and idx == tr.approach and tr.s is not None:
             if s > ap.stop_s and tr.speed < STOPPED_MPS:
                 tr.stopped = True
         if idx != tr.approach:
@@ -196,11 +200,12 @@ class Perception:
         o = Observation(cameras={c: c in healthy for c in self.cams})
         for g in self.L.ped_groups():
             if g not in vis:
-                o.waiting[g] = o.max_wait[g] = o.on_crosswalk[g] = None
+                o.waiting[g] = o.max_wait[g] = o.wait_sum[g] = o.on_crosswalk[g] = None
                 continue
             waiting = [t for t in self.tracks if t.kind == PERSON and t.waiting and t.cw and self.cw_group[t.cw] == g]
             o.waiting[g] = len(waiting)
             o.max_wait[g] = max((ts - t.wait_start for t in waiting), default=0.0)
+            o.wait_sum[g] = sum(ts - t.wait_start for t in waiting)
             o.on_crosswalk[g] = sum(1 for t in self.tracks if t.kind == PERSON and t.zone == "cross"
                                     and t.cw and self.cw_group[t.cw] == g)
         for g in self.L.veh_groups():

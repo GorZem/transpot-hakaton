@@ -24,6 +24,15 @@ class ModeBody(BaseModel):
     mode: Mode | None = None
 
 
+class ZoneBody(BaseModel):
+    key: list[str | int]
+    points: list[tuple[float, float]]
+
+
+class ZonesBody(BaseModel):
+    cameras: dict[str, list[ZoneBody]]
+
+
 def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: dict | None = None,
                run_hub: bool = True, start_io: bool = True) -> FastAPI:
     cfg = cfg if cfg is not None else load_config()
@@ -124,6 +133,53 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
     def params_schema():
         return Params.model_json_schema()
 
+    # ---------- зоны на кадрах камер ----------
+    def zones_payload(sid: str) -> dict:
+        r = rt(sid)
+        cams = []
+        for c in hub.sites[sid]["cameras"]:
+            zones, custom = r.zones_for(c["id"])
+            cams.append({"id": c["id"], "title": c["title"], "width": c["image"]["width"], "height": c["image"]["height"],
+                         "custom": custom, "zones": zones})
+        return {"targets": r.perception.geo.zone_targets(hub.sites[sid]), "cameras": cams}
+
+    @app.get("/api/sites/{sid}/zones")
+    def get_zones(sid: str):
+        return zones_payload(sid)
+
+    @app.put("/api/sites/{sid}/zones")
+    def put_zones(sid: str, body: ZonesBody):
+        r = rt(sid)
+        keys = {tuple(t["key"]) for t in r.perception.geo.zone_targets(hub.sites[sid])}
+        cam_ids = {c["id"] for c in hub.sites[sid]["cameras"]}
+        errors = []
+        for cid, zones in body.cameras.items():
+            if cid not in cam_ids:
+                errors.append(f"нет камеры {cid}")
+            for z in zones:
+                if tuple(z.key) not in keys:
+                    errors.append(f"{cid}: неизвестная зона {z.key}")
+                if not 3 <= len(z.points) <= 60:
+                    errors.append(f"{cid}: у зоны {z.key} должно быть от 3 до 60 точек")
+                if any(not (0 <= v <= 1) for pt in z.points for v in pt):
+                    errors.append(f"{cid}: точки зоны {z.key} вне кадра")
+        if errors:
+            raise HTTPException(422, errors)
+        custom = dict(r.custom_zones or {})
+        for cid, zones in body.cameras.items():
+            custom[cid] = [{"key": list(z.key), "points": [[round(x, 4), round(y, 4)] for x, y in z.points]} for z in zones]
+        r.set_zones(custom)
+        db.set_zones(sid, custom)
+        return zones_payload(sid)
+
+    @app.delete("/api/sites/{sid}/zones/{cam_id}")
+    def reset_zones(sid: str, cam_id: str):
+        r = rt(sid)
+        custom = {k: v for k, v in (r.custom_zones or {}).items() if k != cam_id}
+        r.set_zones(custom or None)
+        db.set_zones(sid, custom or None)
+        return zones_payload(sid)
+
     @app.put("/api/sites/{sid}/params")
     def put_params(sid: str, body: dict):
         r = rt(sid)
@@ -149,10 +205,10 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
 
     # ---------- видео с разметкой ----------
     @app.get("/video/{cam_id}.jpg")
-    async def video_frame(cam_id: str):
+    async def video_frame(cam_id: str, raw: bool = False):
         if cam_id not in hub.camera_site:
             raise HTTPException(404, "камера не найдена")
-        jpg = await asyncio.to_thread(hub.render_camera, cam_id)
+        jpg = await asyncio.to_thread(hub.render_camera, cam_id, raw)
         if jpg is None:
             raise HTTPException(503, "нет кадров с камеры")
         return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})

@@ -100,6 +100,7 @@ class Observation:
     """Сводка двух камер, единственный вход контроллера. None — зона не видна."""
     waiting: dict[str, int | None] = field(default_factory=dict)       # пешеходная группа -> ждут
     max_wait: dict[str, float | None] = field(default_factory=dict)    # -> дольше всех ждёт, с
+    wait_sum: dict[str, float | None] = field(default_factory=dict)    # -> сумма ожидания всех ждущих, чел·с
     on_crosswalk: dict[str, int | None] = field(default_factory=dict)  # -> идут по переходу
     queue: dict[str, int | None] = field(default_factory=dict)         # подход -> стоят у стоп-линии
     eta: dict[str, float | None] = field(default_factory=dict)         # -> ближайшая машина до стоп-линии, с

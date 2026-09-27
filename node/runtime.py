@@ -104,6 +104,28 @@ class SiteRuntime:
         self.p = self.ctrl.p = self.safety.p = self.perception.p = p
         self._event("info", "params", "Параметры алгоритма изменены")
 
+    # ---------- зоны на кадрах камер ----------
+    custom_zones: dict[str, list[dict]] | None = None
+
+    def zones_for(self, cam_id: str) -> tuple[list[dict], bool]:
+        """Зоны камеры (координаты 0…1) и признак «нарисованы вручную»."""
+        if self.custom_zones and cam_id in self.custom_zones:
+            return self.custom_zones[cam_id], True
+        cam = next(c for c in self.cam_models if c.id == cam_id)
+        return self.perception.geo.auto_zones(cam), False
+
+    def set_zones(self, custom: dict[str, list[dict]] | None, log: bool = True) -> None:
+        """Применить разметку. Камеры без ручной разметки получают автоматическую в том же виде,
+        чтобы зона, видимая двумя камерами, проверялась одинаково."""
+        self.custom_zones = custom or None
+        geo = self.perception.geo
+        if self.custom_zones:
+            geo.set_image_zones(self.cam_models, {c.id: self.zones_for(c.id)[0] for c in self.cam_models})
+        else:
+            geo.set_image_zones(self.cam_models, None)
+        if log:
+            self._event("info", "zones", "Разметка зон камер изменена" if custom else "Разметка зон сброшена к автоматической")
+
     # ---------- такт ----------
     def healthy(self) -> set[str]:
         return {cid for cid, f in self.cam_fault.items() if f is None}
