@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/opt/smartcross/center
-Environment=PYTHONIOENCODING=utf-8 PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8 PYTHONUNBUFFERED=1 YOLO_CONFIG_DIR=/opt/smartcross/center/.ultralytics
 ExecStart=/opt/smartcross/center/.venv/bin/python -m center --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
