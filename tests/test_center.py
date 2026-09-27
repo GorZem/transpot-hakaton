@@ -1,65 +1,62 @@
-from datetime import datetime
-
 import pytest
 from fastapi.testclient import TestClient
 
 from center.app import create_app
 
+CFG = {"equipment": {"base_url": "http://127.0.0.1:9"}, "detector": {"model": "yolo11s.pt", "device": "cpu"}}
+
 
 @pytest.fixture()
 def client(tmp_path):
-    app = create_app(db_path=str(tmp_path / "t.db"), run_hub=False)
+    app = create_app(db_path=str(tmp_path / "t.db"), cfg=CFG, run_hub=False, start_io=False)
     with TestClient(app) as c:
         c.app = app
         yield c
 
 
-def tick(client, seconds: float, start: float = 0.0):
-    hub = client.app.state.hub
-    for k in range(round(seconds / 0.1)):
-        for rt in hub.runtimes.values():
-            rt.tick(start + k * 0.1, 0.1, datetime(2026, 10, 1, 12, 0))
-
-
-def test_overview_has_all_pilot_sites(client):
+def test_overview_matches_emulator_objects(client):
     sites = client.get("/api/overview").json()["sites"]
-    assert len(sites) == 10
+    assert len(sites) == 14
+    assert sum(s["equipped"] for s in sites) == 10
     assert {s["kind"] for s in sites} == {"crossing", "tee", "cross"}
-    assert all(55.6 < s["lat"] < 55.7 and 37.7 < s["lon"] < 37.8 for s in sites)
+    off = [s for s in sites if not s["equipped"]]
+    assert all(s["status"] == "off" for s in off)
 
 
 @pytest.mark.parametrize("query, expected", [
     ("краснодарская краснодонская", "x-krasnodarskaya-krasnodonskaya"),
     ("Новороссийская × Ставропольская", "t-novorossiyskaya-stavropolskaya"),
-    ("ул. Судакова, 17", "p-krasnodonskaya-south"),
+    ("Краснодарская Совхозная", "x-krasnodarskaya-sovkhoznaya"),
 ])
-def test_search_by_intersection_and_address(client, query, expected):
+def test_search_by_intersection(client, query, expected):
     res = client.get("/api/search", params={"q": query}).json()
-    assert res, query
-    assert res[0]["site_id"] == expected
+    assert res and res[0]["site_id"] == expected
+
+
+def test_unequipped_site_is_read_only(client):
+    info = client.get("/api/sites/x-krasnodarskaya-sovkhoznaya").json()
+    assert info["equipped"] is False and info["layout"] is None
+    assert client.get("/api/sites/x-krasnodarskaya-sovkhoznaya/state").status_code == 409
+
+
+def test_equipped_site_info(client):
+    info = client.get("/api/sites/x-krasnodonskaya-sovkhoznaya").json()
+    assert {g["id"] for g in info["layout"]["groups"]} == {"veh_A", "veh_B", "ped_A", "ped_B"}
+    assert len(info["cameras"]) == 2
 
 
 def test_params_validation(client):
     sid = "p-krasnodonskaya-mid"
-    r = client.put(f"/api/sites/{sid}/params", json={"group_threshold": 99})
-    assert r.status_code == 422
+    assert client.put(f"/api/sites/{sid}/params", json={"group_threshold": 99}).status_code == 422
     r = client.put(f"/api/sites/{sid}/params", json={"group_threshold": 8})
     assert r.status_code == 200 and r.json()["group_threshold"] == 8
     assert client.get(f"/api/sites/{sid}").json()["params"]["group_threshold"] == 8
 
 
-def test_camera_fault_changes_mode(client):
-    sid = "x-krasnodonskaya-sovkhoznaya"
-    tick(client, 2)
-    client.post(f"/api/sites/{sid}/cameras/cam1", json={"ok": False})
-    tick(client, 1, 2)
-    st = client.get(f"/api/sites/{sid}/state").json()
-    assert st["mode"] == "degraded" and st["status"] == "warn"
-    assert any(not c["ok"] for c in st["cameras"])
-
-
-def test_demo_history_feeds_stats(client):
-    r = client.get("/api/sites/p-krasnodarskaya/stats", params={"hours": 168}).json()
-    assert r["summary"]["ped_served"] > 1000
-    assert r["summary"]["demo_share"] > 0.9
-    assert len(r["series"]) > 100
+def test_no_equipment_means_no_control(client):
+    rt = client.app.state.hub.runtimes["p-krasnodonskaya-mid"]
+    for k in range(30):
+        rt.tick(k * 0.1, 0.1)
+    st = client.get("/api/sites/p-krasnodonskaya-mid/state").json()
+    assert st["engaged"] is False and st["status"] == "alarm"
+    assert st["mode"] == "local"

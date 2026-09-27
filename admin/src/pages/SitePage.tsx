@@ -14,7 +14,7 @@ export function SitePage() {
   const [info, setInfo] = useState<SiteInfo | null>(null)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<Tab>(() => (location.hash.slice(1) as Tab) || 'monitor')
-  const live = useLive<Snapshot>(info ? `/ws/sites/${id}` : null)
+  const live = useLive<Snapshot>(info?.equipped ? `/ws/sites/${id}` : null)
   const snap = live.data
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export function SitePage() {
     <div className="site-page">
       <div className="topbar">
         <Link to={`/?site=${info.id}`} className="btn" aria-label="К карте">← Карта</Link>
-        <Glyph kind={info.kind} status={snap?.status || 'ok'} />
+        <Glyph kind={info.kind} status={info.equipped ? snap?.status || 'warn' : 'off'} />
         <div className="title">
           <h1>{info.title}</h1>
           <div className="sub">
@@ -45,11 +45,46 @@ export function SitePage() {
           </div>
         </div>
         <div className="right">
+          {!info.equipped && <span className="chip off"><i />Не оснащён</span>}
           {snap && <span className={`chip ${snap.status}`}><i />{STATUS_TITLES[snap.status]}: {snap.mode_title}</span>}
-          {!live.connected && <span className="chip">нет связи с центром</span>}
-          <span className="chip demo">тестовый источник данных</span>
+          {info.equipped && !live.connected && <span className="chip">нет связи с центром</span>}
         </div>
       </div>
+      {!info.equipped ? (
+        <main className="content">
+          <div className="info-page">
+            <section className="card">
+              <header><h3>Объект не оснащён</h3></header>
+              <div className="body">
+                <p>
+                  Светофорный объект есть, но камер и связи с системой на нём нет: дорожный контроллер работает по своей
+                  фиксированной программе. Чтобы включить объект в систему, нужно установить две широкоугольные камеры
+                  и подключить контроллер к центру.
+                </p>
+              </div>
+            </section>
+            <section className="card">
+              <header><h3>Паспорт</h3></header>
+              <div className="body">
+                <dl className="kv">
+                  <dt>Тип</dt><dd>{KIND_TITLES[info.kind]}</dd>
+                  <dt>Улицы</dt><dd>{info.streets.join(', ')}</dd>
+                  <dt>Пешеходных переходов</dt><dd>{info.crosswalks.length}</dd>
+                  <dt>Координаты</dt><dd>{info.lat.toFixed(5)}, {info.lon.toFixed(5)}</dd>
+                </dl>
+              </div>
+            </section>
+            <section className="card">
+              <header><h3>Дома рядом</h3></header>
+              <div className="body">
+                <table className="t"><tbody>
+                  {info.addresses.map((a) => <tr key={a.address}><td>{a.address}</td><td>{a.distance_m} м</td></tr>)}
+                </tbody></table>
+              </div>
+            </section>
+          </div>
+        </main>
+      ) : <>
       <nav className="tabs" role="tablist">
         {TABS.map(([t, title]) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{title}</button>
@@ -58,8 +93,9 @@ export function SitePage() {
       <main className="content">
         {tab === 'monitor' && <Monitoring info={info} snap={snap} />}
         {tab === 'stats' && <StatsTab siteId={info.id} />}
-        {tab === 'settings' && <SettingsTab siteId={info.id} params={info.params} onSaved={(p) => setInfo({ ...info, params: p })} />}
+        {tab === 'settings' && info.params && <SettingsTab siteId={info.id} params={info.params} onSaved={(p) => setInfo({ ...info, params: p })} />}
       </main>
+      </>}
     </div>
   )
 }

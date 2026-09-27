@@ -106,20 +106,18 @@ function Label({ x, y, children, anchor = 'middle' }: { x: number; y: number; ch
 }
 
 export function Schematic({ info, snap }: { info: SiteInfo; snap: Snapshot | null }) {
-  const st = info.layout.stages
-  const title = (g: string) => info.layout.groups.find((x) => x.id === g)?.title || g
+  const title = (g: string) => info.layout?.groups.find((x) => x.id === g)?.title || g
   const sig = (g: string) => snap?.signals[g] || 'red'
   const o = snap?.observation
   const q = (g: string) => (o ? o.queue[g] ?? null : 0)
   const em = (g: string) => !!o?.emergency.includes(g)
   const badge = (g: string, x: number, y: number) => <Badge x={x} y={y} n={o ? o.waiting[g] : 0} wait={o?.max_wait[g]} walking={o?.on_crosswalk[g]} />
-  const cam = (id: string) => snap?.cameras.find((c) => c.id === id)?.ok ?? true
+  const cam = (id: string) => snap?.cameras.find((c) => c.id.endsWith(id))?.ok ?? true
   const road = 'var(--road)'
   const walk = 'var(--walk)'
 
   let body: ReactNode
   if (info.kind === 'crossing') {
-    const [a, b] = st[0].veh
     body = (
       <>
         <rect x={140} y={0} width={30} height={W} fill={walk} />
@@ -129,21 +127,18 @@ export function Schematic({ info, snap }: { info: SiteInfo; snap: Snapshot | nul
         <Zebra x={170} y={200} w={100} h={40} across="v" />
         <rect x={170} y={190} width={50} height={3} fill="var(--zebra)" />
         <rect x={220} y={247} width={50} height={3} fill="var(--zebra)" />
-        <Queue x={195} y={190} dir="down" n={q(a)} emergency={em(a)} />
-        <Queue x={245} y={250} dir="up" n={q(b)} emergency={em(b)} />
-        <VehHead x={155} y={170} s={sig(a)} />
-        <VehHead x={285} y={270} s={sig(b)} />
-        <PedHead x={155} y={220} s={sig('cw')} />
-        <PedHead x={285} y={220} s={sig('cw')} />
-        {badge('cw', 360, 216)}
+        <Queue x={195} y={190} dir="down" n={q('veh')} emergency={em('veh')} />
+        <VehHead x={155} y={170} s={sig('veh')} />
+        <VehHead x={285} y={270} s={sig('veh')} />
+        <PedHead x={155} y={220} s={sig('ped')} />
+        <PedHead x={285} y={220} s={sig('ped')} />
+        {badge('ped', 360, 216)}
         <Cam x={300} y={262} angle={-126} ok={cam('cam1')} label="1" />
         <Cam x={140} y={178} angle={54} ok={cam('cam2')} label="2" />
-        <Label x={195} y={16}>{title(a)}</Label>
-        <Label x={245} y={432}>{title(b)}</Label>
+        <Label x={195} y={16}>{title('veh')}</Label>
       </>
     )
   } else if (info.kind === 'tee') {
-    const [a, b] = st[0].veh
     body = (
       <>
         <rect x={140} y={0} width={30} height={W} fill={walk} />
@@ -159,28 +154,24 @@ export function Schematic({ info, snap }: { info: SiteInfo; snap: Snapshot | nul
         <Zebra x={300} y={190} w={30} h={70} across="h" />
         <rect x={170} y={119} width={50} height={3} fill="var(--zebra)" />
         <rect x={338} y={190} width={3} height={35} fill="var(--zebra)" />
-        <Queue x={195} y={118} dir="down" n={q(a)} emergency={em(a)} />
-        <Queue x={245} y={268} dir="up" n={q(b)} emergency={em(b)} />
-        <Queue x={342} y={207} dir="left" n={q('st')} emergency={em('st')} />
-        <VehHead x={155} y={98} s={sig(a)} />
-        <VehHead x={285} y={318} s={sig(b)} />
-        <VehHead x={372} y={168} s={sig('st')} />
-        <PedHead x={155} y={144} s={sig('cw_main')} />
-        <PedHead x={285} y={144} s={sig('cw_main')} />
-        <PedHead x={315} y={176} s={sig('cw_stem')} />
-        <PedHead x={315} y={275} s={sig('cw_stem')} />
-        {badge('cw_main', 360, 132)}
-        {badge('cw_stem', 360, 318)}
+        <Queue x={195} y={118} dir="down" n={q('veh_A')} emergency={em('veh_A')} />
+        <Queue x={342} y={207} dir="left" n={q('veh_B')} emergency={em('veh_B')} />
+        <VehHead x={155} y={98} s={sig('veh_A')} />
+        <VehHead x={285} y={318} s={sig('veh_A')} />
+        <VehHead x={372} y={168} s={sig('veh_B')} />
+        <PedHead x={155} y={144} s={sig('ped_A')} />
+        <PedHead x={285} y={144} s={sig('ped_A')} />
+        <PedHead x={315} y={176} s={sig('ped_B')} />
+        <PedHead x={315} y={275} s={sig('ped_B')} />
+        {badge('ped_A', 360, 132)}
+        {badge('ped_B', 360, 318)}
         <Cam x={140} y={225} angle={0} ok={cam('cam1')} label="1" />
         <Cam x={300} y={292} angle={-119} ok={cam('cam2')} label="2" />
-        <Label x={195} y={16}>{title(a)}</Label>
-        <Label x={245} y={432}>{title(b)}</Label>
-        <Label x={432} y={252} anchor="end">{title('st')}</Label>
+        <Label x={195} y={16}>{title('veh_A')}</Label>
+        <Label x={432} y={252} anchor="end">{title('veh_B')}</Label>
       </>
     )
   } else {
-    const [a, b] = st[0].veh
-    const [c, d] = st[1].veh
     body = (
       <>
         <rect x={140} y={0} width={30} height={W} fill={walk} />
@@ -201,36 +192,30 @@ export function Schematic({ info, snap }: { info: SiteInfo; snap: Snapshot | nul
         <rect x={220} y={318} width={50} height={3} fill="var(--zebra)" />
         <rect x={119} y={220} width={3} height={50} fill="var(--zebra)" />
         <rect x={318} y={170} width={3} height={50} fill="var(--zebra)" />
-        <Queue x={195} y={118} dir="down" n={q(a)} emergency={em(a)} />
-        <Queue x={245} y={322} dir="up" n={q(b)} emergency={em(b)} />
-        <Queue x={118} y={245} dir="right" n={q(c)} emergency={em(c)} />
-        <Queue x={322} y={195} dir="left" n={q(d)} emergency={em(d)} />
-        <VehHead x={155} y={96} s={sig(a)} />
-        <VehHead x={285} y={344} s={sig(b)} />
-        <VehHead x={96} y={290} s={sig(c)} />
-        <VehHead x={344} y={150} s={sig(d)} />
-        {[`cw_${a}`, `cw_${b}`].map((g, i) => (
-          <g key={g}>
+        <Queue x={195} y={118} dir="down" n={q('veh_A')} emergency={em('veh_A')} />
+        <Queue x={118} y={245} dir="right" n={q('veh_B')} emergency={em('veh_B')} />
+        <VehHead x={155} y={96} s={sig('veh_A')} />
+        <VehHead x={285} y={344} s={sig('veh_A')} />
+        <VehHead x={96} y={290} s={sig('veh_B')} />
+        <VehHead x={344} y={150} s={sig('veh_B')} />
+        {['ped_A', 'ped_A'].map((g, i) => (
+          <g key={i}>
             <PedHead x={156} y={i ? 296 : 144} s={sig(g)} />
             <PedHead x={284} y={i ? 296 : 144} s={sig(g)} />
           </g>
         ))}
-        {[`cw_${c}`, `cw_${d}`].map((g, i) => (
-          <g key={g}>
+        {['ped_B', 'ped_B'].map((g, i) => (
+          <g key={i}>
             <PedHead x={i ? 296 : 144} y={157} s={sig(g)} />
             <PedHead x={i ? 296 : 144} y={283} s={sig(g)} />
           </g>
         ))}
-        {badge(`cw_${a}`, 262, 100)}
-        {badge(`cw_${b}`, 178, 344)}
-        {badge(`cw_${c}`, 70, 196)}
-        {badge(`cw_${d}`, 372, 250)}
+        {badge('ped_A', 262, 100)}
+        {badge('ped_B', 70, 196)}
         <Cam x={150} y={150} angle={45} ok={cam('cam1')} label="1" />
         <Cam x={290} y={290} angle={-135} ok={cam('cam2')} label="2" />
-        <Label x={195} y={16}>{title(a)}</Label>
-        <Label x={245} y={432}>{title(b)}</Label>
-        <Label x={8} y={262} anchor="start">{title(c)}</Label>
-        <Label x={432} y={184} anchor="end">{title(d)}</Label>
+        <Label x={195} y={16}>{title('veh_A')}</Label>
+        <Label x={8} y={262} anchor="start">{title('veh_B')}</Label>
       </>
     )
   }

@@ -6,13 +6,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from center.config import load_config
 from center.db import DB
-from center.demo import generate
 from center.hub import Hub
 from node.model import Mode
 from node.params import Params
@@ -20,27 +20,18 @@ from node.params import Params
 ROOT = Path(__file__).resolve().parent.parent
 
 
-class CameraBody(BaseModel):
-    ok: bool
-
-
 class ModeBody(BaseModel):
     mode: Mode | None = None
 
 
-class GroupBody(BaseModel):
-    size: int = 10
-
-
-def create_app(db_path: str | None = None, sites_path: str | None = None, demo_history: bool = True,
-               run_hub: bool = True) -> FastAPI:
+def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: dict | None = None,
+               run_hub: bool = True, start_io: bool = True) -> FastAPI:
+    cfg = cfg if cfg is not None else load_config()
     db = DB(db_path or str(ROOT / "data" / "center.db"))
-    hub = Hub(Path(sites_path or ROOT / "data" / "sites.json"), db)
+    hub = Hub(Path(sites_path or ROOT / "data" / "sites.json"), db, cfg, start_io=start_io)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if demo_history and not db.has_source("demo"):
-            await asyncio.to_thread(generate, db, list(hub.sites.values()), hub.started)
         if run_hub:
             hub.start()
         yield
@@ -52,8 +43,10 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, demo_h
     app.state.db = db
 
     def rt(sid: str):
-        if sid not in hub.runtimes:
+        if sid not in hub.sites:
             raise HTTPException(404, f"объект {sid} не найден")
+        if sid not in hub.runtimes:
+            raise HTTPException(409, "объект не оснащён: системой не управляется")
         return hub.runtimes[sid]
 
     # ---------- объекты и поиск ----------
@@ -61,13 +54,18 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, demo_h
     def overview():
         return {"district": hub.district, "sites": hub.overview()}
 
+    @app.get("/api/system")
+    def system():
+        return hub.system()
+
     @app.get("/api/search")
     def search(q: str = ""):
         return hub.search_index.search(q)
 
     @app.get("/api/sites/{sid}")
     def site(sid: str):
-        rt(sid)
+        if sid not in hub.sites:
+            raise HTTPException(404, f"объект {sid} не найден")
         return hub.site_info(sid)
 
     @app.get("/api/sites/{sid}/state")
@@ -83,11 +81,6 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, demo_h
         return {"since": since.isoformat(timespec="minutes"), "bucket_min": bucket,
                 "summary": db.summary(sid, since), "series": db.timeseries(sid, since, bucket),
                 "wait_hist": db.wait_histogram(sid, since)}
-
-    @app.get("/api/stats/summary")
-    def stats_all(hours: float = 24):
-        since = datetime.now() - timedelta(hours=hours)
-        return {sid: db.summary(sid, since) for sid in hub.sites}
 
     @app.get("/api/sites/{sid}/events")
     def events(sid: str, limit: int = 50, important: bool = False):
@@ -105,23 +98,15 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, demo_h
 
     @app.put("/api/sites/{sid}/params")
     def put_params(sid: str, body: dict):
-        rt(sid)
+        r = rt(sid)
         try:
-            p = Params(**{**hub.runtimes[sid].p.model_dump(), **body})
+            p = Params(**{**r.p.model_dump(), **body})
         except ValidationError as e:
             raise HTTPException(422, [{"field": ".".join(map(str, x["loc"])), "message": x["msg"]} for x in e.errors()])
         hub.set_params(sid, p)
         return p.model_dump()
 
-    # ---------- управление ----------
-    @app.post("/api/sites/{sid}/cameras/{cid}")
-    def camera(sid: str, cid: str, body: CameraBody):
-        r = rt(sid)
-        if cid not in r.cam_ok:
-            raise HTTPException(404, f"камера {cid} не найдена")
-        r.set_camera(cid, body.ok)
-        return r.snapshot()
-
+    # ---------- управление оператора ----------
     @app.post("/api/sites/{sid}/mode")
     def mode(sid: str, body: ModeBody):
         r = rt(sid)
@@ -134,17 +119,30 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, demo_h
         r.reset_trip()
         return r.snapshot()
 
-    @app.post("/api/sites/{sid}/demo/group")
-    def demo_group(sid: str, body: GroupBody):
-        r = rt(sid)
-        r.demo_group(max(1, min(30, body.size)))
-        return r.snapshot()
+    # ---------- видео с разметкой ----------
+    @app.get("/video/{cam_id}.jpg")
+    async def video_frame(cam_id: str):
+        if cam_id not in hub.camera_site:
+            raise HTTPException(404, "камера не найдена")
+        jpg = await asyncio.to_thread(hub.render_camera, cam_id)
+        if jpg is None:
+            raise HTTPException(503, "нет кадров с камеры")
+        return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
-    @app.post("/api/sites/{sid}/demo/emergency")
-    def demo_emergency(sid: str):
-        r = rt(sid)
-        r.demo_emergency()
-        return r.snapshot()
+    @app.get("/video/{cam_id}.mjpg")
+    async def video(cam_id: str, request: Request):
+        if cam_id not in hub.camera_site:
+            raise HTTPException(404, "камера не найдена")
+
+        async def gen():
+            while not await request.is_disconnected():
+                jpg = await asyncio.to_thread(hub.render_camera, cam_id)
+                if jpg:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
+                await asyncio.sleep(0.2)
+
+        return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame",
+                                 headers={"Cache-Control": "no-store"})
 
     # ---------- живые данные ----------
     @app.websocket("/ws/sites/{sid}")

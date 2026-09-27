@@ -83,6 +83,22 @@ class Controller:
             self.stage = 0
             self.trans = Transition(0, now, set(), set(), set(self.L.stages[0].veh), "выход из жёлтого мигающего")
 
+    def adopt(self, stage: int, ped_green: set[str], now: float) -> None:
+        """Подхватить управление с устойчивой фазы, в которой объект уже работает по своей программе."""
+        self.trans = None
+        self.stage, self.stage_t0 = stage, now
+        st = self.L.stages[stage]
+        for g, x in self.L.groups.items():
+            if x.kind == "veh":
+                self.signals[g] = Veh.GREEN if g in st.veh else Veh.RED
+            else:
+                self.signals[g] = Ped.GREEN if g in ped_green else Ped.RED
+        self.ped_active = set(ped_green)
+        self.ped_end = {g: now + self.p.ped_min_green_s for g in ped_green}
+        for g in ped_green:
+            self.last_served[g] = now
+        self._event("info", "takeover", f"Управление принято на фазе «{st.title}»")
+
     def drain_events(self) -> list[ControllerEvent]:
         ev, self.events = self.events, []
         return ev

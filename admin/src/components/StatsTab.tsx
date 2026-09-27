@@ -41,11 +41,6 @@ export function StatsTab({ siteId }: { siteId: string }) {
         <div className="seg" role="group" aria-label="Период">
           {RANGES.map(([h, t]) => <button key={h} className={h === hours ? 'on' : ''} onClick={() => setHours(h)}>{t}</button>)}
         </div>
-        {s && s.demo_share > 0 && (
-          <span className="chip demo">
-            {s.demo_share > 0.99 ? 'демонстрационные данные' : `${pct(s.demo_share)} данных за период демонстрационные`}
-          </span>
-        )}
       </div>
       <div className="tiles">
         <div className="tile"><div className="v">{fmt(s?.ped_served)}</div><div className="l">пешеходов перешли</div></div>

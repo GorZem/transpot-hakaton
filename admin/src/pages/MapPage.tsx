@@ -63,7 +63,7 @@ export function MapPage() {
     return initial.map((s) => ({ ...s, ...(byId.get(s.id) || {}) }))
   }, [initial, live.data])
   const names = useMemo(() => new Map(sites.map((s) => [s.id, s.title])), [sites])
-  const counts = { ok: 0, warn: 0, alarm: 0 }
+  const counts = { ok: 0, warn: 0, alarm: 0, off: 0 }
   sites.forEach((s) => counts[s.status]++)
 
   const select = (id: string) => {
@@ -74,8 +74,9 @@ export function MapPage() {
   const onPick = (h: SearchHit) => select(h.site_id)
 
   const groups: [string, SiteSummary[]][] = [
-    ['Пешеходные переходы', sites.filter((s) => s.kind === 'crossing')],
-    ['Перекрёстки', sites.filter((s) => s.kind !== 'crossing')],
+    ['Пешеходные переходы', sites.filter((s) => s.equipped && s.kind === 'crossing')],
+    ['Перекрёстки', sites.filter((s) => s.equipped && s.kind !== 'crossing')],
+    ['Не оснащены (своя программа контроллера)', sites.filter((s) => !s.equipped)],
   ]
 
   return (
@@ -94,6 +95,7 @@ export function MapPage() {
             <span className="chip ok"><i />{STATUS_TITLES.ok}: {counts.ok}</span>
             <span className="chip warn"><i />{STATUS_TITLES.warn}: {counts.warn}</span>
             <span className="chip alarm"><i />{STATUS_TITLES.alarm}: {counts.alarm}</span>
+            <span className="chip off"><i />{STATUS_TITLES.off}: {counts.off}</span>
             {!live.connected && <span className="chip">нет связи с центром</span>}
           </div>
         </div>
@@ -110,8 +112,10 @@ export function MapPage() {
                     <span className="s">{s.status === 'ok' ? s.stage : s.mode_title}</span>
                   </span>
                   <span className="n">
-                    <span className="mono">{fmt(s.waiting)} ждут</span>
-                    <span className="mono">{fmt(s.flow_vph)} авт/ч</span>
+                    {s.equipped && <>
+                      <span className="mono">{fmt(s.waiting)} ждут</span>
+                      <span className="mono">{fmt(s.flow_vph)} авт/ч</span>
+                    </>}
                   </span>
                 </button>
               ))}
@@ -145,14 +149,14 @@ export function MapPage() {
                 <div className="pop">
                   <h3>{s.title}</h3>
                   <div className="muted">{KIND_TITLES[s.kind]} · {s.streets.join(', ')}</div>
-                  <dl className="kv">
+                  {s.equipped ? <dl className="kv">
                     <dt>Состояние</dt><dd>{STATUS_TITLES[s.status]}</dd>
                     <dt>Режим</dt><dd>{s.mode_title}</dd>
                     <dt>Сейчас</dt><dd>{s.stage}</dd>
                     <dt>Ждут пешеходов</dt><dd>{fmt(s.waiting)}</dd>
                     <dt>Интенсивность</dt><dd>{fmt(s.flow_vph, 0, 'авт/ч')}</dd>
                     <dt>Камеры</dt><dd>{s.cameras_ok} из {s.cameras_total}</dd>
-                  </dl>
+                  </dl> : <p className="muted" style={{ margin: '10px 0 12px' }}>Камер и связи с системой нет: объект работает по своей программе.</p>}
                   <button className="btn primary" onClick={() => nav(`/sites/${s.id}`)}>Открыть объект</button>
                 </div>
               </Popup>
@@ -161,8 +165,9 @@ export function MapPage() {
         </MapContainer>
         <div className="legend">
           <span><i className="lamp green" /> работает в адаптивном режиме</span>
-          <span><i className="lamp yellow" /> отказ камеры, резервный режим</span>
-          <span><i className="lamp red" /> авария, жёлтый мигающий</span>
+          <span><i className="lamp yellow" /> отказ камеры или подхват управления</span>
+          <span><i className="lamp red" /> авария или нет связи с контроллером</span>
+          <span><i className="lamp grey" /> не оснащён, своя программа</span>
         </div>
       </div>
     </div>

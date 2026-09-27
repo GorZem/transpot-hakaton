@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -70,7 +71,7 @@ class Stage:
 class Camera:
     id: str
     title: str
-    covers: tuple[str, ...]  # id групп, чьи зоны камера видит (зоны ожидания, подходы)
+    covers: tuple[str, ...]  # группы, чьи зоны камера видит (считается по калибровке камеры)
 
 
 @dataclass
@@ -110,70 +111,34 @@ class Observation:
         return sum(self.waiting.get(g) or 0 for g in groups)
 
 
-def _axis(bearing: float) -> tuple[str, str, str, str]:
-    """Названия подходов по азимуту главной дороги."""
-    if bearing < 45 or bearing >= 135:
-        return "n", "s", "с севера", "с юга"
-    return "w", "e", "с запада", "с востока"
+def _len(cw: dict) -> float:
+    return math.hypot(cw["b"][0] - cw["a"][0], cw["b"][1] - cw["a"][1])
 
 
-def build_layout(kind: str, bearing: float = 0.0, road_width_m: float = 14.0) -> Layout:
-    a, b, ta, tb = _axis(bearing)
-    if kind == "crossing":
-        groups = [
-            Group(a, "veh", f"Подход {ta}"),
-            Group(b, "veh", f"Подход {tb}"),
-            Group("cw", "ped", "Переход", road_width_m),
-        ]
-        stages = [Stage("S1", "Транспорт", veh=(a, b)), Stage("S2", "Пешеходы", ped=("cw",))]
-        conflicts = {frozenset((a, "cw")), frozenset((b, "cw"))}
-        cameras = [
-            Camera("cam1", f"Камера 1: подход {ta}, переход", (a, "cw")),
-            Camera("cam2", f"Камера 2: подход {tb}, переход", (b, "cw")),
-        ]
-    elif kind == "tee":
-        groups = [
-            Group(a, "veh", f"Главная {ta}"),
-            Group(b, "veh", f"Главная {tb}"),
-            Group("st", "veh", "Примыкание"),
-            Group("cw_main", "ped", "Переход через главную", road_width_m),
-            Group("cw_stem", "ped", "Переход через примыкание", 10.5),
-        ]
-        stages = [
-            Stage("S1", "Главная дорога", veh=(a, b), ped=("cw_stem",)),
-            Stage("S2", "Примыкание", veh=("st",)),
-            Stage("S3", "Пешеходы через главную", ped=("cw_main",)),
-        ]
-        conflicts = {frozenset(p) for p in [(a, "st"), (b, "st"), (a, "cw_main"), (b, "cw_main"),
-                                            ("st", "cw_stem"), ("st", "cw_main")]}
-        cameras = [
-            Camera("cam1", "Камера 1: напротив примыкания", ("st", "cw_stem", "cw_main")),
-            Camera("cam2", "Камера 2: угол примыкания", (a, b, "cw_main")),
-        ]
-    elif kind == "cross":
-        c, d, tc, td = ("w", "e", "с запада", "с востока") if a == "n" else ("n", "s", "с севера", "с юга")
-        groups = [
-            Group(a, "veh", f"Подход {ta}"), Group(b, "veh", f"Подход {tb}"),
-            Group(c, "veh", f"Подход {tc}"), Group(d, "veh", f"Подход {td}"),
-            Group(f"cw_{a}", "ped", f"Переход через северный рукав" if a == "n" else "Переход через западный рукав", road_width_m),
-            Group(f"cw_{b}", "ped", f"Переход через южный рукав" if b == "s" else "Переход через восточный рукав", road_width_m),
-            Group(f"cw_{c}", "ped", f"Переход через западный рукав" if c == "w" else "Переход через северный рукав", road_width_m),
-            Group(f"cw_{d}", "ped", f"Переход через восточный рукав" if d == "e" else "Переход через южный рукав", road_width_m),
-        ]
-        # Пешеходы идут параллельно своему потоку машин: при движении по оси a-b
-        # открыты переходы через рукава c и d.
-        stages = [
-            Stage("S1", "Ось " + ("север-юг" if a == "n" else "запад-восток"), veh=(a, b), ped=(f"cw_{c}", f"cw_{d}")),
-            Stage("S2", "Ось " + ("запад-восток" if c == "w" else "север-юг"), veh=(c, d), ped=(f"cw_{a}", f"cw_{b}")),
-        ]
-        conflicts = {frozenset(p) for p in [(a, c), (a, d), (b, c), (b, d),
-                                            (a, f"cw_{a}"), (a, f"cw_{b}"), (b, f"cw_{a}"), (b, f"cw_{b}"),
-                                            (c, f"cw_{c}"), (c, f"cw_{d}"), (d, f"cw_{c}"), (d, f"cw_{d}")]}
-        # Камеры по диагонали: каждая видит два перехода у дальнего угла и два подхода.
-        cameras = [
-            Camera("cam1", "Камера 1: диагональ", (b, d, f"cw_{b}", f"cw_{d}")),
-            Camera("cam2", "Камера 2: диагональ", (a, c, f"cw_{a}", f"cw_{c}")),
-        ]
+def build_layout(site: dict) -> Layout:
+    """Модель объекта из паспорта. Группы сигналов — как у дорожного контроллера на объекте:
+    переход — veh / ped; перекрёсток — veh_A, veh_B (транспорт по осям) и ped_A, ped_B
+    (пешеходы поперёк улиц оси A и B). Пешеходы идут параллельно транспорту другой оси."""
+    titles = {g["id"]: g["title"] for g in site.get("signal_groups", [])}
+    lengths: dict[str, float] = {}
+    for cw in site.get("crosswalks", []):
+        lengths[cw["group"]] = max(lengths.get(cw["group"], 0.0), round(_len(cw), 1))
+    cams = [Camera(c["id"], c["title"], ()) for c in site.get("cameras", [])]
+    if site["kind"] == "crossing":
+        groups = [Group("veh", "veh", titles.get("veh", "Транспорт")),
+                  Group("ped", "ped", titles.get("ped", "Пешеходы через переход"), lengths.get("ped", 14.0))]
+        stages = [Stage("S1", "Транспорт", veh=("veh",)), Stage("S2", "Пешеходы", ped=("ped",))]
+        conflicts = {frozenset(("veh", "ped"))}
     else:
-        raise ValueError(f"неизвестный тип объекта: {kind}")
-    return Layout(kind, {g.id: g for g in groups}, stages, conflicts, cameras)
+        axes = site.get("axes", {})
+        groups = [
+            Group("veh_A", "veh", titles.get("veh_A", f"Транспорт: {axes.get('A', 'ось A')}")),
+            Group("veh_B", "veh", titles.get("veh_B", f"Транспорт: {axes.get('B', 'ось B')}")),
+            Group("ped_A", "ped", titles.get("ped_A", f"Пешеходы поперёк: {axes.get('A', 'ось A')}"), lengths.get("ped_A", 14.0)),
+            Group("ped_B", "ped", titles.get("ped_B", f"Пешеходы поперёк: {axes.get('B', 'ось B')}"), lengths.get("ped_B", 14.0)),
+        ]
+        a, b = axes.get("A", "ось A"), axes.get("B", "ось B")
+        stages = [Stage("S1", f"Движение по {a}", veh=("veh_A",), ped=("ped_B",)),
+                  Stage("S2", f"Движение по {b}", veh=("veh_B",), ped=("ped_A",))]
+        conflicts = {frozenset(("veh_A", "veh_B")), frozenset(("veh_A", "ped_A")), frozenset(("veh_B", "ped_B"))}
+    return Layout(site["kind"], {g.id: g for g in groups}, stages, conflicts, cams)

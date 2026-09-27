@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 export type Kind = 'crossing' | 'tee' | 'cross'
-export type Status = 'ok' | 'warn' | 'alarm'
+export type Status = 'ok' | 'warn' | 'alarm' | 'off'
 
 export interface SiteSummary {
   id: string
@@ -10,10 +10,10 @@ export interface SiteSummary {
   lat: number
   lon: number
   streets: string[]
+  equipped: boolean
   status: Status
   mode: string
   mode_title: string
-  source: string
   stage: string
   waiting: number
   flow_vph: number
@@ -31,10 +31,11 @@ export interface SiteEvent {
 
 export interface Snapshot extends SiteSummary {
   ts: number
+  engaged: boolean
   mode_reason: string
   stage_id: string | null
   next_stage: string | null
-  stage_time_s: number
+  stage_time_s: number | null
   status_text: string
   info: Record<string, number | boolean | string[] | null>
   signals: Record<string, string>
@@ -48,7 +49,8 @@ export interface Snapshot extends SiteSummary {
     flow_window_s: Record<string, number>
     emergency: string[]
   }
-  cameras: { id: string; title: string; ok: boolean; covers: string[] }[]
+  cameras: { id: string; title: string; ok: boolean; fault: string | null; fault_title: string; fps: number; covers: string[] }[]
+  equipment: { connected: boolean; mode: string | null; error: string | null; rejected: string | null }
   trip: string | null
   forced: string | null
   events: SiteEvent[]
@@ -67,17 +69,19 @@ export interface SiteInfo {
   title: string
   lat: number
   lon: number
-  main_street: string
+  equipped: boolean
   streets: string[]
-  road_bearing_deg: number
+  axes: Record<string, string>
   addresses: { address: string; distance_m: number }[]
-  layout: {
+  crosswalks: { id: string; group: string }[]
+  cameras: { id: string; title: string; hfov_deg: number; height_m: number }[]
+  layout: null | {
     kind: Kind
     groups: Group[]
     stages: { id: string; title: string; veh: string[]; ped: string[] }[]
     conflicts: string[][]
   }
-  params: Record<string, number>
+  params: Record<string, number> | null
 }
 
 export interface SearchHit {
@@ -128,7 +132,7 @@ export const KIND_TITLES: Record<Kind, string> = {
   cross: 'Перекрёсток',
 }
 
-export const STATUS_TITLES: Record<Status, string> = { ok: 'Норма', warn: 'Внимание', alarm: 'Авария' }
+export const STATUS_TITLES: Record<Status, string> = { ok: 'Норма', warn: 'Внимание', alarm: 'Авария', off: 'Не оснащён' }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, {

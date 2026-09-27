@@ -264,3 +264,19 @@ table.t td:first-child { font-family: var(--f-body); }
   .field { grid-template-columns: 1fr; }
   .field .in { grid-column: 1; grid-row: auto; }
 }
+
+/* ---------- видео камер ---------- */
+.cams { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+.cam { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.cam img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #0d1012; display: block; }
+.cam figcaption { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.cam figcaption .mono { margin-left: auto; }
+.cam .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); flex: none; }
+.cam .dot.bad { background: var(--alarm); }
+
+/* ---------- неоснащённые объекты ---------- */
+.marker.off { background: var(--faint); }
+.chip.off { background: var(--panel-2); color: var(--muted); }
+.lamp.grey { background: var(--faint); }
+.info-page { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
+.info-page p { margin: 0; max-width: 68ch; }
