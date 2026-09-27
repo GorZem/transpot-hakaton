@@ -110,7 +110,7 @@ PUT /api/objects/p-krasnodonskaya-mid/signals
 | `POST /api/cameras/{id}/fault {"fault": "black"}` | неисправность: `black`, `freeze`, `offline`, `noise`, `null` — исправна |
 | `PUT /api/scenario {"traffic_scale": 1.6, "pedestrian_scale": 2}` | интенсивность транспорта и пешеходов |
 | `POST /api/traffic/clear {"cars": true, "pedestrians": true}` | убрать машины и/или пешеходов (новые продолжат появляться на въездах) |
-| `POST /api/traffic/fill {"per_km": 25}` | сразу расставить машины по пустым полосам |
+| `POST /api/traffic/fill {"per_km": 8}` | сразу расставить машины по пустым полосам |
 | `GET /cam/{camera_id}/labeled?min_px=12` | кадр и разметка на этом же кадре для дообучения детектора (см. ниже) |
 | `GET /api/objects/{id}/truth` | фактическая обстановка: кто ждёт, сколько машин на подходах. Для проверки распознавания |
 | `GET /api/objects/{id}/events` | журнал контроллера объекта |

@@ -67,7 +67,7 @@ class ClearBody(BaseModel):
 
 
 class FillBody(BaseModel):
-    per_km: float = Field(25.0, gt=0, le=150, description="машин на километр полосы (умножается на интенсивность)")
+    per_km: float = Field(8.0, gt=0, le=150, description="машин на километр полосы (умножается на интенсивность)")
 
 
 class ScenarioBody(BaseModel):

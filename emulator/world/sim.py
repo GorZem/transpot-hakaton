@@ -524,7 +524,7 @@ class World:
                 cw.peds.clear()
         return out
 
-    def fill(self, per_km: float = 25.0) -> int:
+    def fill(self, per_km: float = 8.0) -> int:
         """Сразу расставить машины по свободным полосам (плотность — машин на километр полосы)."""
         added = 0
         for lane in self.net.lanes:
