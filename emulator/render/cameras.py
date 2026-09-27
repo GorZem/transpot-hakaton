@@ -121,6 +121,8 @@ class Rig:
     last_capture: float = 0.0
     fault: str | None = None
     rendering: bool = False
+    labels: list | None = None      # разметка кадра, который сейчас рендерится
+    labels_meta: dict | None = None
 
 
 class FrameHub:
@@ -132,11 +134,30 @@ class FrameHub:
         self.viewers: dict[str, int] = defaultdict(int)
         self.requested: dict[str, float] = {}
         self.offline: set[str] = set()
+        self.want_labels: dict[str, float] = {}
+        self.labeled: dict[str, tuple[int, bytes, float, list, dict]] = {}
 
-    def publish(self, cid: str, jpeg: bytes) -> None:
+    def publish(self, cid: str, jpeg: bytes, labels: list | None = None, meta: dict | None = None) -> int:
         with self.lock:
             seq = self.frames.get(cid, (0, b"", 0.0))[0] + 1
-            self.frames[cid] = (seq, jpeg, time.time())
+            ts = time.time()
+            self.frames[cid] = (seq, jpeg, ts)
+            if labels is not None:
+                self.labeled[cid] = (seq, jpeg, ts, labels, meta or {})
+            return seq
+
+    def request_labels(self, cid: str) -> None:
+        with self.lock:
+            self.want_labels[cid] = time.monotonic() + 5.0
+            self.requested[cid] = time.monotonic()
+
+    def labels_wanted(self, cid: str) -> bool:
+        with self.lock:
+            return self.want_labels.get(cid, 0.0) > time.monotonic()
+
+    def get_labeled(self, cid: str):
+        with self.lock:
+            return self.labeled.get(cid)
 
     def get(self, cid: str) -> tuple[int, bytes, float] | None:
         with self.lock:
@@ -165,6 +186,7 @@ class CameraManager:
         self.pending: list[Rig] = []
         self.pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cam")
         self.frozen: dict[str, bytes] = {}
+        self.labeler = None  # emulator.render.labels.Labeler, задаётся при запуске
         for sp in self.specs:
             self.rigs[sp.id] = self._make_rig(sp, self.dist.Wr, self.dist.Hr, self.dist.hfov_r, self.dist.vfov_r)
         # обзорная камера для демонстрации (без искажения)
@@ -238,7 +260,8 @@ class CameraManager:
                 continue
             h, w = rig.tex.getYSize(), rig.tex.getXSize()
             arr = np.frombuffer(bytes(raw), np.uint8).reshape(h, w, 3)
-            self.pool.submit(self._process, rig, arr, stamp)
+            self.pool.submit(self._process, rig, arr, stamp, rig.labels, rig.labels_meta)
+            rig.labels = rig.labels_meta = None
         self.pending = []
         period = 1.0 / self.cs.fps
         for rig in list(self.rigs.values()) + [self.overview]:
@@ -255,11 +278,17 @@ class CameraManager:
                 continue
             if cid == "overview":
                 self._aim_overview(sim_t)
+            elif self.labeler is not None and self.hub.labels_wanted(cid):
+                # разметка из того же состояния сцены, которое сейчас уйдёт в рендер
+                m = rig.cam_np.getMat(self.base.render)
+                mat = np.array([[m.getCell(r, c) for c in range(4)] for r in range(4)])
+                rig.labels = self.labeler.label(mat, np.asarray(rig.spec.pos, dtype=float))
+                rig.labels_meta = {"sim_time_s": round(sim_t, 2), "fault": rig.fault}
             rig.buffer.setActive(True)
             rig.rendering = True
             self.pending.append(rig)
 
-    def _process(self, rig: Rig, arr: np.ndarray, stamp: datetime) -> None:
+    def _process(self, rig: Rig, arr: np.ndarray, stamp: datetime, labels=None, meta=None) -> None:
         try:
             cid = rig.spec.id
             if cid == "overview":
@@ -277,7 +306,7 @@ class CameraManager:
                 data = jpg.tobytes()
                 if rig.fault is None:
                     self.frozen[cid] = data
-                self.hub.publish(cid, data)
+                self.hub.publish(cid, data, labels, meta)
         except Exception as e:  # поток камеры не должен падать
             print("camera", rig.spec.id, e)
 

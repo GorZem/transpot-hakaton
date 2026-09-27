@@ -308,6 +308,41 @@ def create_app(st: State) -> FastAPI:
             await asyncio.sleep(0.03)
         raise HTTPException(504, "кадр не готов")
 
+    @app.get("/cam/{cid}/labeled")
+    async def labeled(cid: str, min_px: float = 12.0, image: bool = True, include_hidden: bool = False):
+        """Свежий кадр камеры и разметка на этом же кадре (для дообучения детектора).
+
+        Рамки `bbox` = [x1, y1, x2, y2] в пикселях выходного кадра (с искажением объектива), обрезаны краем кадра.
+        Классы: car, bus, truck, emergency, person. `min_px` — отбросить рамки, у которых и ширина, и высота меньше.
+        `occluded_frac` — доля агента, закрытая домами или более близкими агентами (приближённо);
+        агенты, полностью закрытые домами, не возвращаются. `include_hidden=true` — вернуть и почти закрытые (visible=false).
+        `image=false` — без JPEG в ответе."""
+        import base64
+        rig = st.cams.rigs.get(cid)
+        if rig is None:
+            raise HTTPException(404, f"нет камеры {cid}")
+        if rig.fault in ("offline", "freeze"):
+            raise HTTPException(409, f"камера в неисправности {rig.fault}: разметка недоступна")
+        t_req = time.time()
+        st.hub.request_labels(cid)
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 4:
+            f = st.hub.get_labeled(cid)
+            if f and f[2] >= t_req:
+                seq, jpeg, ts, objs, meta = f
+                objs = [o for o in objs if (include_hidden or o["visible"]) and
+                        (o["bbox"][2] - o["bbox"][0] >= min_px or o["bbox"][3] - o["bbox"][1] >= min_px)]
+                out = {"camera_id": cid, "object_id": rig.spec.object_id, "frame_seq": seq, "frame_ts": ts,
+                       "sim_time_s": meta.get("sim_time_s"), "fault": meta.get("fault"),
+                       "width": st.settings.camera.width, "height": st.settings.camera.height,
+                       "calibration": {"K": st.cams.dist.K.round(3).tolist(), "D": st.cams.dist.D.tolist()},
+                       "objects": objs}
+                if image:
+                    out["image_jpeg_base64"] = base64.b64encode(jpeg).decode()
+                return out
+            await asyncio.sleep(0.03)
+        raise HTTPException(504, "кадр с разметкой не готов, повторите запрос")
+
     @app.get("/cam/{cid}.mjpg")
     async def stream(cid: str, request: Request):
         rig = _rig(cid)

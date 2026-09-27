@@ -103,3 +103,31 @@ def test_group_crosses_on_green(net):
         world.step(0.05)
     crossing = sum(1 for p in world.peds if p.cw is cw and p.state == "cross" and p.group is not None)
     assert crossing == 8
+
+
+def test_labels_inside_frame(net):
+    """Разметка без видеокарты: камера объекта как NodePath, рамки внутри кадра, классы известные."""
+    import numpy as np
+    from panda3d.core import NodePath
+
+    from emulator.render.cameras import Distortion, place_cameras
+    from emulator.render.labels import Labeler
+
+    s = Settings()
+    world = World(net, s)
+    world.warmup(120)
+    world.update_poses()
+    lab = Labeler(world, Distortion(s.camera), s.camera)
+    spec = next(sp for sp in place_cameras(net, 6.0) if sp.id == "x-krasnodarskaya-krasnodonskaya-cam1")
+    cam = NodePath("cam")
+    cam.setPos(*spec.pos)
+    cam.lookAt(*spec.target)
+    m = cam.getMat()
+    mat = np.array([[m.getCell(r, c) for c in range(4)] for r in range(4)])
+    objs = lab.label(mat, np.asarray(spec.pos, float))
+    assert objs, "на перекрёстке в кадре должны быть агенты"
+    for o in objs:
+        x1, y1, x2, y2 = o["bbox"]
+        assert 0 <= x1 < x2 <= s.camera.width and 0 <= y1 < y2 <= s.camera.height
+        assert o["class"] in {"car", "bus", "truck", "emergency", "person"}
+        assert 0 <= o["occluded_frac"] <= 1

@@ -108,9 +108,35 @@ PUT /api/objects/p-krasnodonskaya-mid/signals
 | `POST /api/objects/{id}/emergency` | скорая с маячками едет через объект |
 | `POST /api/cameras/{id}/fault {"fault": "black"}` | неисправность: `black`, `freeze`, `offline`, `noise`, `null` — исправна |
 | `PUT /api/scenario {"traffic_scale": 1.6, "pedestrian_scale": 2}` | интенсивность транспорта и пешеходов |
+| `GET /cam/{camera_id}/labeled?min_px=12` | кадр и разметка на этом же кадре для дообучения детектора (см. ниже) |
 | `GET /api/objects/{id}/truth` | фактическая обстановка: кто ждёт, сколько машин на подходах. Для проверки распознавания |
 | `GET /api/objects/{id}/events` | журнал контроллера объекта |
 | `GET /cam/overview.mjpg` | 3D-обзор выбранного объекта (`POST /api/overview {"object_id": ...}`) |
+
+### Разметка кадров для дообучения
+
+`GET /cam/{camera_id}/labeled` отдаёт свежий кадр и рамки всех машин и людей **на этом же кадре**.
+Разметка считается в момент постановки кадра на рендер из того же состояния сцены, рассинхрона нет.
+
+```json
+{"camera_id": "p-krasnodonskaya-mid-cam1", "frame_seq": 812, "frame_ts": 1790520000.1, "sim_time_s": 912.4,
+ "width": 960, "height": 540, "fault": null, "calibration": {"K": [...], "D": [...]},
+ "objects": [{"id": "ped-311", "class": "person", "bbox": [612.0, 288.5, 631.2, 340.9],
+              "occluded_frac": 0.0, "occluded_by_buildings": 0.0, "truncated": false, "visible": true,
+              "distance_m": 17.3, "state": "waiting", "crossing_on_red": false, "crosswalk_id": 36, "group": false},
+             {"id": "car-88", "class": "car", "bbox": [...], "speed_mps": 0.0, ...}],
+ "image_jpeg_base64": "..."}
+```
+
+- `bbox` = [x1, y1, x2, y2] в пикселях выходного кадра, то есть с искажением объектива. Рамка — проекция
+  8 углов 3D-габарита агента той же моделью камеры (k1, k2), обрезанная краем кадра (`truncated`).
+- Классы: `car`, `bus`, `truck`, `emergency`, `person`.
+- Агенты, полностью закрытые домами, не возвращаются. `occluded_frac` — доля агента, закрытая домами
+  или более близкими агентами (для агентов приближённо, по перекрытию рамок). `visible` = `occluded_frac < 0.9`.
+  Деревья и опоры не учитываются.
+- Параметры: `min_px` (по умолчанию 12) — отбросить рамки, у которых и ширина, и высота меньше;
+  `include_hidden=true` — вернуть и почти закрытые; `image=false` — без JPEG.
+- При неисправности `freeze` или `offline` ответ `409`, при `black`/`noise` поле `fault` заполнено.
 
 ## Как устроено
 
@@ -121,6 +147,7 @@ emulator/
   world/sim.py       машины (модель IDM), пешеходы, скорая, «истина»
   render/scene.py    3D-сцена Panda3D: дороги, разметка, дома, деревья, светофоры, машины, люди
   render/cameras.py  расстановка камер, рендер в текстуру, искажение, JPEG
+  render/labels.py   разметка кадра: рамки агентов с учётом искажения и закрытости
   server/api.py      HTTP API и видеопотоки
   server/static/     веб-интерфейс: карта и панель объекта
   data/              выгрузка OSM (© участники OpenStreetMap, ODbL)

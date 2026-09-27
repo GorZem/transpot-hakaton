@@ -67,6 +67,8 @@ def main() -> None:
     scene.setup_lights(base.render)
     hub = FrameHub()
     cams = CameraManager(base, net, s.camera, hub, always_on=args.always_on)
+    from emulator.render.labels import Labeler
+    cams.labeler = Labeler(world, cams.dist, s.camera)
     print(f"==> Камер: {len(cams.rigs)}, угол обзора {cams.dist.hfov_out:.0f}°, кадр {s.camera.width}×{s.camera.height}")
 
     if args.window:
