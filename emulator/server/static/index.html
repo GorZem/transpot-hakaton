@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Эмулятор Люблино</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span class="dot"></span>Эмулятор участка <b>Люблино</b></div>
+  <div class="stats mono" id="stats">—</div>
+  <label class="slider">Транспорт <input type="range" id="traffic" min="0" max="3" step="0.1"><output id="trafficOut"></output></label>
+  <label class="slider">Пешеходы <input type="range" id="peds" min="0" max="5" step="0.1"><output id="pedsOut"></output></label>
+  <a class="doc" href="/docs" target="_blank" rel="noopener">API</a>
+</header>
+
+<main class="layout">
+  <section class="mapwrap">
+    <canvas id="map" aria-label="Карта участка с движением"></canvas>
+    <div class="legend">
+      <span><i class="lg car"></i>машина</span><span><i class="lg bus"></i>автобус, грузовик</span><span><i class="lg amb"></i>скорая</span>
+      <span><i class="lg pw"></i>ждёт</span><span><i class="lg pc"></i>переходит</span><span><i class="lg pv"></i>на красный</span>
+      <span><i class="lg cam"></i>обзор камеры</span>
+    </div>
+    <div class="hint">Колесо — масштаб, перетаскивание — сдвиг, клик по объекту — выбрать</div>
+  </section>
+
+  <aside class="panel">
+    <nav class="objlist" id="objlist"></nav>
+    <div id="obj" class="obj"></div>
+  </aside>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

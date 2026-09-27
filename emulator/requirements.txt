@@ -1,0 +1,7 @@
+panda3d>=1.10.15
+numpy>=1.26
+opencv-python-headless>=4.9
+fastapi>=0.115
+uvicorn[standard]>=0.29
+pydantic>=2.6
+pytest>=8
