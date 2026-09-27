@@ -1,0 +1,6 @@
+[Unit]
+Description=Автовыкат эмулятора и центра из GitHub
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/smartcross/emulator/deploy/server/autodeploy.sh

@@ -8,9 +8,19 @@ from collections import defaultdict
 
 
 def configure_panda(window: bool, threaded: bool = False) -> None:
+    import os
+    import sys
+
     from panda3d.core import loadPrcFileData
     if threaded:  # подготовка сцены и отрисовка в отдельных потоках Panda3D
         loadPrcFileData("", "threading-model Cull/Draw")
+    # сервер без монитора (Linux без X): рендер на видеокарте через EGL.
+    # EMULATOR_HEADLESS=1 — включить принудительно, =0 — выключить.
+    headless = os.environ.get("EMULATOR_HEADLESS")
+    if headless is None:
+        headless = "1" if (sys.platform.startswith("linux") and not window and not os.environ.get("DISPLAY")) else "0"
+    if headless == "1":
+        loadPrcFileData("", "load-display p3headlessgl")
     loadPrcFileData("", "\n".join([
         "window-type " + ("onscreen" if window else "offscreen"),
         "window-title Эмулятор участка Люблино",

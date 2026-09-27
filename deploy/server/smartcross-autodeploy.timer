@@ -1,0 +1,10 @@
+[Unit]
+Description=Проверка обновлений на GitHub каждые 20 с
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=20
+AccuracySec=1
+
+[Install]
+WantedBy=timers.target
