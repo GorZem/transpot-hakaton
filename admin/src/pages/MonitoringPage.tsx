@@ -6,6 +6,7 @@ import {
 } from '../api'
 import { CameraPtz } from '../components/CameraPtz'
 import { CameraView } from '../components/CameraView'
+import { StaticSwitch } from '../components/StaticSwitch'
 import { Schematic } from '../components/Schematic'
 import { MobileSitePicker } from '../components/MobileSitePicker'
 import { Shell } from '../components/Shell'
@@ -18,8 +19,7 @@ const SIGNAL_TITLES: Record<string, string> = {
 const DEVICE_MODES: Record<string, string> = { remote: 'управляет система', local: 'своя программа', flash: 'жёлтый мигающий' }
 const MODES: [string | null, string, string][] = [
   [null, 'Умный', 'Система решает по камерам'],
-  ['fixed', 'Статический цикл', 'Система ведёт фиксированный цикл, без камер'],
-  ['local', 'Штатная программа', 'Система отпускает светофор: работает программа дорожного контроллера'],
+  ['fixed', 'Фикс. цикл системы', 'Система ведёт фиксированный цикл, без камер'],
   ['flashing', 'Аварийный', 'Жёлтый мигающий'],
 ]
 
@@ -117,6 +117,7 @@ export function MonitoringPage() {
                   <button className="btn" disabled={busy} onClick={() => act('/reset')}>Сбросить аварию</button>
                 </div>
               )}
+              <StaticSwitch siteId={info.id} value={snap ? (snap.static ?? null) : undefined} reason={snap?.static_reason} />
               <div className="seg" role="group" aria-label="Режим оператора" style={{ marginTop: 4 }}>
                 {MODES.map(([m, t, hint]) => (
                   <button key={t} title={hint} className={(snap?.forced ?? null) === m ? 'on' : ''} disabled={busy}

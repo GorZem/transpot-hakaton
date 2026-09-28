@@ -119,6 +119,14 @@ class SiteRuntime:
 
     # ---------- управление оператора ----------
     released = False  # оператор вернул объект на штатную программу контроллера
+    auto_static: str | None = None  # статический режим включён автоматически: почему (камера непригодна)
+
+    def static_reason(self) -> str | None:
+        """Статический режим включается сам, если хоть одна камера объекта непригодна: неисправна,
+        не видит (туман, закрыта, пустая сцена), поворачивается или не работает распознавание.
+        По одной камере система не управляет: половина подходов и переходов вслепую."""
+        bad = [f"{c.title} — {self.cam_state(c.id)[2]}" for c in self.layout.cameras if self.cam_state(c.id)[0] is not None]
+        return "; ".join(bad) if bad else None
 
     def set_forced_mode(self, mode: Mode | None) -> None:
         self.forced = mode
@@ -131,7 +139,7 @@ class SiteRuntime:
         по своей штатной программе. Камеры и статистика продолжают работать, фазы система не переключает."""
         self.forced = None
         self.released = True
-        self._event("warn", "operator", "Оператор: штатная программа контроллера, система не управляет светофором")
+        self._event("warn", "operator", "Оператор: статический режим — штатная программа контроллера, система не управляет светофором")
 
     def reset_trip(self) -> None:
         if self.trip:
@@ -357,13 +365,21 @@ class SiteRuntime:
         mode, reason = self._choose_mode()
         self.ctrl.set_mode(mode, reason, now)
         link = self.link
-        if self.released:
+        auto = self.static_reason() if (self.forced is None and not self.trip and not self.released) else None
+        if auto != self.auto_static:
+            if auto and not self.auto_static:
+                self._event("critical", "static", f"Статический режим: штатная программа контроллера — {auto}")
+            elif not auto:
+                self._event("info", "static", "Камеры снова пригодны: система принимает управление светофором")
+            self.auto_static = auto
+        if self.released or auto:
             # управление отдано контроллеру объекта; без команд и heartbeat связь сама вернёт его к своей программе
             self.engaged = False
             if link:
                 link.active = False
             self.signals = dict(link.device_groups) if link else {}
-            self.status_text = "Штатная программа контроллера: включена оператором"
+            self.status_text = ("Статический режим: штатная программа контроллера, включён оператором" if self.released
+                                else f"Статический режим (автоматически): {auto}")
             self.minute.mode_s["local"] = self.minute.mode_s.get("local", 0.0) + dt
             self.ctrl.drain_events()
             return
@@ -458,15 +474,19 @@ class SiteRuntime:
 
     # ---------- состояние для админки ----------
     def status(self) -> str:
-        if self.trip or (self.link and not self.link.connected) or self.ctrl.mode == Mode.FLASHING:
+        if self.trip or (self.link and not self.link.connected) or self.ctrl.mode == Mode.FLASHING or self.auto_static:
             return "alarm"
+        if self.released:
+            return "warn"
         if not self.engaged or self.ctrl.mode in (Mode.DEGRADED, Mode.FIXED):
             return "warn"
         return "ok"
 
     def mode_title(self) -> str:
         if self.released:
-            return "Штатная программа (оператор)"
+            return "Статический режим (оператор)"
+        if self.auto_static:
+            return "Статический режим: камера непригодна"
         if self.link is None or not self.link.connected:
             return "Нет связи с контроллером"
         if not self.engaged:
@@ -483,6 +503,8 @@ class SiteRuntime:
             "waiting": sum(v or 0 for v in o.waiting.values()),
             "flow_vph": round(sum(v or 0 for v in o.flow_vph.values())),
             "cameras_ok": len(self.healthy()), "cameras_total": len(self.streams),
+            "static": "operator" if self.released else ("auto" if self.auto_static else None),
+            "static_reason": self.auto_static,
         }
 
     def snapshot(self) -> dict:

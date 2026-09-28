@@ -202,6 +202,8 @@ table.t td { font-variant-numeric: tabular-nums; }
   padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 5px; }
 .legend span { display: flex; align-items: center; gap: 8px; }
 .legend-toggle { background: none; border: 0; color: var(--ink); font: inherit; padding: 0; cursor: pointer; text-align: left; }
+.static-box { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px; font-size: 12.5px; }
+.static-auto { color: var(--alarm); font-size: 12px; }
 .legend-h { font-weight: 600; margin-top: 4px; font-size: 11.5px; color: var(--muted); }
 .legend .bar { width: 22px; height: 6px; border-radius: 3px; display: inline-block; flex: none; }
 .legend .bar.dashed { background: repeating-linear-gradient(90deg, #8a857a 0 3px, transparent 3px 8px); }

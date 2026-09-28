@@ -8,6 +8,7 @@ import { LOAD, LoadLayer, SignalLayer, useArms } from '../components/MapLayers'
 import { SearchBox } from '../components/SearchBox'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
+import { StaticSwitch } from '../components/StaticSwitch'
 
 function icon(s: SiteSummary, selected: boolean) {
   return L.divIcon({
@@ -99,6 +100,9 @@ export function MapPage() {
                         <dt>Поток</dt><dd>{fmt(s.flow_vph, 0, 'авт/ч')}</dd>
                         <dt>Камеры</dt><dd>{s.cameras_ok} из {s.cameras_total}</dd>
                       </dl>
+                    ) : null}
+                    {s.equipped ? (
+                      <StaticSwitch siteId={s.id} value={s.static ?? null} reason={s.static_reason} />
                     ) : <p className="muted">Камер и связи с системой нет: работает по своей программе.</p>}
                     <button className="btn primary" onClick={() => nav(`/monitoring/${s.id}`)}>Открыть мониторинг</button>
                   </div>
@@ -118,7 +122,7 @@ export function MapPage() {
             </button>
             <span><i className="lamp green" /> адаптивный режим</span>
             <span><i className="lamp yellow" /> отказ камеры или подхват</span>
-            <span><i className="lamp red" /> авария, нет связи</span>
+            <span><i className="lamp red" /> авария, нет связи или камера непригодна (статический режим)</span>
             <span><i className="lamp grey" /> не оснащён</span>
             {showLoad && <>
               <b className="legend-h">Подходы: стоят машин</b>

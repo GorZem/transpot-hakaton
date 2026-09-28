@@ -32,6 +32,10 @@ class ZoneBody(BaseModel):
     points: list[tuple[float, float]]
 
 
+class StaticBody(BaseModel):
+    on: bool
+
+
 class ZonesBody(BaseModel):
     cameras: dict[str, list[ZoneBody]]
 
@@ -250,6 +254,17 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
         return p.model_dump()
 
     # ---------- управление оператора ----------
+    @app.post("/api/sites/{sid}/static")
+    def static_mode(sid: str, body: StaticBody):
+        """Статический режим: светофор работает по штатной программе дорожного контроллера (on=true)
+        или снова под управлением системы (on=false)."""
+        r = rt(sid)
+        if body.on:
+            r.set_released()
+        elif r.released:
+            r.set_forced_mode(None)
+        return r.snapshot()
+
     @app.post("/api/sites/{sid}/mode")
     def mode(sid: str, body: ModeBody):
         r = rt(sid)

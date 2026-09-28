@@ -69,8 +69,31 @@ def test_operator_standard_program_and_back(client):
     for k in range(5):
         rt.tick(k * 0.1, 0.1)
     st = client.get(f"/api/sites/{sid}/state").json()
-    assert st["engaged"] is False and st["mode_title"].startswith("Штатная программа")
+    assert st["engaged"] is False and st["mode_title"].startswith("Статический режим")
     assert rt.link is None or rt.link.active is False
     st = client.post(f"/api/sites/{sid}/mode", json={"mode": None}).json()
     assert st["forced"] is None and rt.released is False
     assert client.post(f"/api/sites/{sid}/mode", json={"mode": "что-то"}).status_code == 422
+    # переключатель «Статический режим»
+    st = client.post(f"/api/sites/{sid}/static", json={"on": True}).json()
+    assert st["static"] == "operator" and st["forced"] == "local"
+    st = client.post(f"/api/sites/{sid}/static", json={"on": False}).json()
+    assert st["static"] is None and rt.released is False
+
+
+def test_one_unusable_camera_means_static_and_red(client):
+    """Одна камера из двух непригодна — весь объект на штатной программе, на карте красный."""
+    sid = "p-krasnodonskaya-mid"
+    rt = client.app.state.hub.runtimes[sid]
+    rt._t_start = 0.0
+    cams = list(rt.streams)
+    for c in cams:
+        rt.streams[c].health = lambda: None
+    rt.tick(0.0, 0.1)
+    rt.streams[cams[0]].health = lambda: "blind"
+    rt.tick(0.1, 0.1)
+    s = next(x for x in client.app.state.hub.overview() if x["id"] == sid)
+    assert s["static"] == "auto" and s["status"] == "alarm" and rt.engaged is False
+    rt.streams[cams[0]].health = lambda: None
+    rt.tick(0.2, 0.1)
+    assert rt.auto_static is None

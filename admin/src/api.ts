@@ -19,6 +19,8 @@ export interface SiteSummary {
   flow_vph: number
   cameras_ok: number
   cameras_total: number
+  static?: 'operator' | 'auto' | null   // статический режим: включён оператором или сам (камера непригодна)
+  static_reason?: string | null
 }
 
 export interface SiteEvent {
