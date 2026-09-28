@@ -4,6 +4,7 @@ import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { fmt, KIND_TITLES, STATUS_TITLES, useOverview, type SearchHit, type SiteSummary } from '../api'
 import { glyphSvg } from '../components/Glyph'
+import { LOAD, LoadLayer, SignalLayer, useArms } from '../components/MapLayers'
 import { SearchBox } from '../components/SearchBox'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
@@ -14,6 +15,11 @@ function icon(s: SiteSummary, selected: boolean) {
     html: `<div class="marker ${s.status}${selected ? ' sel' : ''}">${glyphSvg(s.kind, '#1b1b1b')}</div>`,
     iconSize: [36, 36], iconAnchor: [18, 18], popupAnchor: [0, -18],
   })
+}
+
+function useToggle(key: string): [boolean, (v: boolean) => void] {
+  const [v, setV] = useState(() => { try { return localStorage.getItem(key) === '1' } catch { return false } })
+  return [v, (x: boolean) => { setV(x); try { localStorage.setItem(key, x ? '1' : '0') } catch { /* хранилище недоступно */ } }]
 }
 
 function FitAll({ sites }: { sites: SiteSummary[] }) {
@@ -41,6 +47,10 @@ export function MapPage() {
   const selected = params.get('site')
   const { sites, connected } = useOverview()
   const [fly, setFly] = useState<[number, number] | null>(null)
+  const [showLoad, setShowLoad] = useToggle('map.load')
+  const [showSignals, setShowSignals] = useToggle('map.signals')
+  const arms = useArms(showLoad || showSignals)
+  const [legendOpen, setLegendOpen] = useState(false)
 
   const select = (id: string) => {
     setParams({ site: id }, { replace: true })
@@ -70,6 +80,8 @@ export function MapPage() {
                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={19} />
             <FitAll sites={sites} />
             <FlyTo target={fly} />
+            {showLoad && <LoadLayer sites={arms} />}
+            {showSignals && <SignalLayer sites={arms} />}
             {sites.map((s) => (
               <Marker key={s.id} position={[s.lat, s.lon]} icon={icon(s, s.id === selected)}
                       eventHandlers={{ click: () => setParams({ site: s.id }, { replace: true }) }}>
@@ -92,11 +104,29 @@ export function MapPage() {
               </Marker>
             ))}
           </MapContainer>
-          <div className="legend">
+          <div className="map-layers" role="group" aria-label="Слои карты">
+            <label className="switch"><input type="checkbox" checked={showLoad} onChange={(e) => setShowLoad(e.target.checked)} />
+              <i aria-hidden /> Загруженность перекрёстков</label>
+            <label className="switch"><input type="checkbox" checked={showSignals} onChange={(e) => setShowSignals(e.target.checked)} />
+              <i aria-hidden /> Сигнал для транспорта</label>
+          </div>
+          <div className={`legend${legendOpen ? ' open' : ''}`}>
+            <button className="legend-toggle mobile-only" aria-expanded={legendOpen} onClick={() => setLegendOpen((v) => !v)}>
+              {legendOpen ? 'Скрыть легенду' : 'Легенда'}
+            </button>
             <span><i className="lamp green" /> адаптивный режим</span>
             <span><i className="lamp yellow" /> отказ камеры или подхват</span>
             <span><i className="lamp red" /> авария, нет связи</span>
             <span><i className="lamp grey" /> не оснащён</span>
+            {showLoad && <>
+              <b className="legend-h">Подходы: стоят машин</b>
+              <span><i className="bar" style={{ background: LOAD.free.color }} /> 0–1 · свободно</span>
+              <span><i className="bar" style={{ background: LOAD.moderate.color }} /> 2–3 · средне</span>
+              <span><i className="bar" style={{ background: LOAD.heavy.color }} /> 4–6 · плотно</span>
+              <span><i className="bar" style={{ background: LOAD.jam.color }} /> 7 и больше · затор</span>
+              <span><i className="bar dashed" /> подход не виден камерам</span>
+            </>}
+            {showSignals && <b className="legend-h">Кружок у стоп-линии — сигнал для машин</b>}
           </div>
         </div>
       </div>

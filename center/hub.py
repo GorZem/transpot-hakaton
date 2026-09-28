@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import json
 import logging
 import threading
@@ -29,6 +30,37 @@ log = logging.getLogger("center")
 
 SIG_BGR = {Veh.GREEN: (80, 200, 60), Veh.GREEN_BLINK: (80, 200, 60), Veh.YELLOW: (0, 190, 255),
            Veh.RED_YELLOW: (0, 190, 255), Veh.FLASH: (0, 190, 255), Veh.RED: (60, 60, 230), Ped.OFF: (140, 140, 140)}
+
+
+ARM_LINE_M = 80.0  # длина ответвления на карте от центра объекта, м
+
+
+def _cut(pts, s0: float, s1: float) -> list:
+    """Часть ломаной от s0 до s1 метров вдоль неё."""
+    pts = np.asarray(pts, float)
+    out, acc = [], 0.0
+    for a, b in zip(pts[:-1], pts[1:]):
+        seg = float(np.hypot(*(b - a)))
+        if seg < 1e-9:
+            continue
+        lo, hi = max(s0, acc), min(s1, acc + seg)
+        if lo < hi:
+            p0 = a + (b - a) * (lo - acc) / seg
+            if not out or np.hypot(*(out[-1] - p0)) > 1e-6:
+                out.append(p0)
+            out.append(a + (b - a) * (hi - acc) / seg)
+        acc += seg
+        if acc >= s1:
+            break
+    return [(float(x), float(y)) for x, y in out]
+
+
+def _load_level(load: dict | None) -> str:
+    """Загруженность подхода по числу стоящих машин: свободно, средне, плотно, затор."""
+    if load is None:
+        return "unknown"
+    n = load["stopped"]
+    return "free" if n <= 1 else "moderate" if n <= 3 else "heavy" if n <= 6 else "jam"
 
 
 class Hub:
@@ -135,6 +167,30 @@ class Hub:
                 out.append({**base, "equipped": False, "status": "off", "mode": "none",
                             "mode_title": "Не оснащён: работает по своей программе", "stage": "—",
                             "waiting": 0, "flow_vph": 0, "cameras_ok": 0, "cameras_total": 0})
+        return out
+
+    def map_arms(self) -> list[dict]:
+        """Подходы оснащённых объектов для карты: линия ответвления, загруженность и сигнал для транспорта."""
+        out = []
+        for sid, rt in self.runtimes.items():
+            s = self.sites[sid]
+            kx = 111_320 * math.cos(math.radians(s["lat"]))
+            arms = []
+            for i, ap in enumerate(rt.perception.geo.approaches):
+                line = _cut(ap.pts, 3.0, ARM_LINE_M)
+                sl = min(ap.stop_s, 25.0)
+                lamp = (_cut(ap.pts, sl, sl + 0.5) or line[:1])[0]  # у стоп-линии: там светофор этого подхода
+                load = rt.perception.arm_load[i] if i < len(rt.perception.arm_load) else None
+                sig = rt.signals.get(ap.group)
+                arms.append({
+                    "street": ap.street, "group": ap.group,
+                    "line": [[round(s["lat"] + n / 111_320, 7), round(s["lon"] + e / kx, 7)] for e, n in line],
+                    "lamp": [round(s["lat"] + lamp[1] / 111_320, 7), round(s["lon"] + lamp[0] / kx, 7)],
+                    "stopped": load and load["stopped"], "moving": load and load["moving"],
+                    "level": _load_level(load),
+                    "signal": str(getattr(sig, "value", sig)) if sig is not None else None,
+                })
+            out.append({"id": sid, "arms": arms})
         return out
 
     def system(self) -> dict:

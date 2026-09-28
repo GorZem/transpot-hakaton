@@ -79,6 +79,12 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
     def overview():
         return {"district": hub.district, "sites": hub.overview()}
 
+    @app.get("/api/map/arms")
+    def map_arms():
+        """Подходы оснащённых объектов: линия на карте, загруженность (free | moderate | heavy | jam | unknown)
+        по числу стоящих машин и текущий сигнал для транспорта."""
+        return hub.map_arms()
+
     @app.get("/api/system")
     def system():
         return hub.system()

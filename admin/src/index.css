@@ -201,6 +201,21 @@ table.t td { font-variant-numeric: tabular-nums; }
 .legend { position: absolute; right: 12px; bottom: 22px; z-index: 500; background: var(--panel); border: 1px solid var(--frame); border-radius: 8px;
   padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 5px; }
 .legend span { display: flex; align-items: center; gap: 8px; }
+.legend-toggle { background: none; border: 0; color: var(--ink); font: inherit; padding: 0; cursor: pointer; text-align: left; }
+.legend-h { font-weight: 600; margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+.legend .bar { width: 22px; height: 6px; border-radius: 3px; display: inline-block; flex: none; }
+.legend .bar.dashed { background: repeating-linear-gradient(90deg, #8a857a 0 3px, transparent 3px 8px); }
+.map-layers { position: absolute; top: 12px; right: 12px; z-index: 500; background: var(--panel); border: 1px solid var(--frame);
+  border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; position: relative; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch i { width: 30px; height: 17px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line); position: relative; flex: none; transition: background .15s; }
+.switch i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--muted); transition: transform .15s, background .15s; }
+.switch input:checked + i { background: var(--accent-soft); border-color: var(--green); }
+.switch input:checked + i::after { transform: translateX(13px); background: var(--green); }
+.switch input:focus-visible + i { outline: 2px solid var(--orange); outline-offset: 2px; }
+.lamp-blink { animation: lamp-blink 1s steps(1) infinite; }
+@keyframes lamp-blink { 50% { opacity: .25; } }
 
 /* ---------- поиск ---------- */
 .search { position: relative; }
@@ -309,6 +324,8 @@ table.t td { font-variant-numeric: tabular-nums; }
   .chart-sm { height: 200px; }
   .cam .cap { flex-wrap: wrap; font-size: 12.5px; }
   .alerts .a { grid-template-columns: 16px 40px 1fr; font-size: 12.5px; }
+  .legend:not(.open) > :not(.legend-toggle) { display: none; }
+  .map-layers { top: 6px; right: 6px; font-size: 11.5px; padding: 6px 8px; }
   .legend { right: 6px; bottom: 18px; font-size: 11px; padding: 6px 8px; }
   .save-bar { flex-direction: column; align-items: stretch; }
   .ze-bar .side-text { flex-basis: 100%; }

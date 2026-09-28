@@ -79,6 +79,7 @@ class Perception:
         self._ids = itertools.count(1)
         self.last_ts = 0.0
         self.overlay: dict[str, tuple] = {}   # камера -> (кадр, детекции) для видео с разметкой
+        self.arm_load: list[dict | None] = [None] * len(self.geo.approaches)  # по подходам: для карты загруженности
         self.lock = threading.Lock()
         self.cw_group = {cw.id: cw.group for cw in self.geo.crosswalks}
 
@@ -241,7 +242,28 @@ class Perception:
                 if t.emergency and 0 < gap < 150:
                     o.emergency.add(g)
             o.queue[g], o.eta[g] = q, eta
+        self.arm_load = self._arm_load(vis)
         return o
+
+    def _arm_load(self, vis) -> list[dict | None]:
+        """Машины на каждом подходе в пределах QUEUE_RANGE_M от стоп-линии: стоят и едут к перекрёстку.
+        None — подход не виден ни одной исправной камерой."""
+        out: list[dict | None] = []
+        for i, ap in enumerate(self.geo.approaches):
+            if ap.group not in vis:
+                out.append(None)
+                continue
+            stopped = moving = 0
+            for t in self.tracks:
+                if t.kind != VEHICLE or t.approach != i or t.hits < 2 or t.s is None:
+                    continue
+                if -2 < t.s - ap.stop_s < QUEUE_RANGE_M:
+                    if t.speed < STOPPED_MPS:
+                        stopped += 1
+                    else:
+                        moving += 1
+            out.append({"stopped": stopped, "moving": moving})
+        return out
 
     def refresh(self, ts: float, healthy: set[str]) -> Observation:
         """Новых кадров нет: убрать устаревшие треки и пересчитать наблюдение (например, камеры отказали)."""
