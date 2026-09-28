@@ -334,3 +334,9 @@ table.t td { font-variant-numeric: tabular-nums; }
   .tiles { grid-template-columns: 1fr; }
   .brand b { font-size: 18px; }
 }
+
+/* подпись карты: мелко и приглушённо, в тон панели */
+.leaflet-container .leaflet-control-attribution { background: rgba(27, 27, 27, .55); color: var(--faint); font-size: 9.5px;
+  padding: 0 5px; border-radius: 0 4px 0 0; margin: 0; }
+.leaflet-container .leaflet-control-attribution a { color: var(--faint); text-decoration: none; }
+.leaflet-container .leaflet-control-attribution a:hover { color: var(--muted); }

@@ -1,6 +1,6 @@
 import L from 'leaflet'
 import { useEffect, useRef, useState } from 'react'
-import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
+import { AttributionControl, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { fmt, KIND_TITLES, STATUS_TITLES, useOverview, type SearchHit, type SiteSummary } from '../api'
 import { glyphSvg } from '../components/Glyph'
@@ -75,8 +75,10 @@ export function MapPage() {
           </>}
         </aside>
         <div className="map-panel">
-          <MapContainer center={[55.6765, 37.7535]} zoom={16}>
-            <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          <MapContainer center={[55.6765, 37.7535]} zoom={16} attributionControl={false}>
+            {/* без приставки «Leaflet»; подпись OpenStreetMap обязательна по лицензии данных карты (ODbL) */}
+            <AttributionControl position="bottomleft" prefix={false} />
+            <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>'
                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={19} />
             <FitAll sites={sites} />
             <FlyTo target={fly} />
