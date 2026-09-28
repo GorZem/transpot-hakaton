@@ -1,6 +1,6 @@
 # Сервер: эмулятор и центр
 
-GPU-сервер (Ryzen 9 5950X, 64 ГБ, RTX 4090, Ubuntu 24.04). Обе части работают на нём как службы systemd:
+GPU-сервер 141.105.65.164 (Ryzen 9 5950X, 64 ГБ, RTX 4090, Ubuntu 24.04). Обе части работают на нём как службы systemd:
 
 | Что | Папка на сервере | Ветка | Служба | Порт внутри | Снаружи (по PIN) |
 |---|---|---|---|---|---|
@@ -15,6 +15,11 @@ GPU-сервер (Ryzen 9 5950X, 64 ГБ, RTX 4090, Ubuntu 24.04). Обе час
 `systemctl restart smartcross-gate`. Сменить `GATE_SECRET` — выйти всем. Перебор PIN ограничен:
 10 попыток в минуту с одного адреса.
 Эмулятор рендерит без монитора через EGL драйвера NVIDIA (`EMULATOR_HEADLESS=1`).
+
+Домены с HTTPS: https://transport.gorzem.com — админка, https://emulator.gorzem.com — эмулятор (PIN те же).
+Они настроены отдельным файлом `/etc/nginx/sites-available/smartcross-domains` (не в репозитории, его не трогает
+`install-units.sh`); он использует `map $connection_upgrade` и `limit_req_zone pinlogin` из `nginx-smartcross.conf` —
+не переименовывайте их. Сертификат Let's Encrypt (`certbot`, имя `gorzem`) продлевается сам: `certbot.timer`.
 
 ## Как выкатить изменения
 

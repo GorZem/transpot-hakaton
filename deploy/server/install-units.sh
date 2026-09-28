@@ -6,7 +6,7 @@ install -m 644 "$HERE"/smartcross-emulator.service "$HERE"/smartcross-center.ser
   "$HERE"/smartcross-autodeploy.service "$HERE"/smartcross-autodeploy.timer /etc/systemd/system/
 install -m 644 "$HERE"/nginx-smartcross.conf /etc/nginx/sites-available/smartcross
 ln -sf /etc/nginx/sites-available/smartcross /etc/nginx/sites-enabled/smartcross
-rm -f /etc/nginx/sites-enabled/default
+rm -f /etc/nginx/sites-enabled/default   # только его: smartcross-domains (домены и HTTPS) остаётся
 systemctl daemon-reload
 systemctl enable -q smartcross-emulator smartcross-center smartcross-gate smartcross-autodeploy.timer nginx
 systemctl restart smartcross-gate   # вход по PIN: быстрый, перезапуск не мешает работе
