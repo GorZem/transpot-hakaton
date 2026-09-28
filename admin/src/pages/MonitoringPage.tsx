@@ -4,6 +4,7 @@ import {
   api, fmt, KIND_TITLES, lastSite, post, rememberSite, timeOf, useLive, useOverview,
   type Incident, type SiteInfo, type Snapshot,
 } from '../api'
+import { CameraPtz } from '../components/CameraPtz'
 import { CameraView } from '../components/CameraView'
 import { Schematic } from '../components/Schematic'
 import { Shell } from '../components/Shell'
@@ -48,6 +49,7 @@ export function MonitoringPage() {
   const [alerts, setAlerts] = useState<Incident[]>([])
   const [busy, setBusy] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [calib, setCalib] = useState(false)
 
   // выбранный объект: из адреса, иначе последний открытый, иначе первый оснащённый
   useEffect(() => {
@@ -132,6 +134,12 @@ export function MonitoringPage() {
                 <span>{info.title}</span>
                 <span className="muted" style={{ fontSize: 12 }}>{KIND_TITLES[info.kind]} · {info.streets.join(', ')}</span>
                 {snap && <span className={`chip ${snap.status}`} style={{ marginLeft: 'auto' }}><i />{snap.mode_title}</span>}
+                {info.equipped && (
+                  <button className={`btn${calib ? ' on' : ''}`} aria-pressed={calib} onClick={() => setCalib((v) => !v)}
+                          title="Повернуть камеры: ход ±90° от положения при монтаже">
+                    {calib ? 'Готово' : 'Повернуть камеры'}
+                  </button>
+                )}
               </div>
             )}
             {info?.equipped ? (
@@ -139,12 +147,15 @@ export function MonitoringPage() {
                 {info.cameras.map((c, k) => {
                   const st = snap?.cameras.find((x) => x.id === c.id)
                   return (
-                    <figure key={c.id} className={`cam${st && !st.ok ? ' bad' : ''}`}>
+                    <figure key={c.id} className={`cam${st && st.level === 'fault' ? ' bad' : ''}${st && st.level === 'warn' ? ' warn' : ''}`}>
                       <div className="cap">
                         <span>Камера {k + 1}{near ? ` · ${near}` : ''}</span>
-                        <span className="muted">{st ? (st.ok ? `${fmt(st.fps, 1)} к/с` : st.fault_title) : ''}</span>
+                        <span className={st && !st.ok ? `cam-state ${st.level}` : 'muted'}>
+                          {st ? (st.ok ? `${fmt(st.fps, 1)} к/с` : st.fault_title) : ''}
+                        </span>
                       </div>
                       <CameraView key={c.id} camId={c.id} alt={c.title} />
+                      {calib && info && <CameraPtz siteId={info.id} camId={c.id} ptz={st?.ptz} />}
                     </figure>
                   )
                 })}

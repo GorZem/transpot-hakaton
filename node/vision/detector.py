@@ -97,6 +97,8 @@ class DetectorWorker:
         self._stop = threading.Event()
         self.ready = threading.Event()
         self.error: str | None = None
+        self.paused = False            # остановить распознавание (проверка аварийного режима «компьютерное зрение не работает»)
+        self.last_cycle = time.monotonic()  # когда цикл распознавания последний раз отработал
         self._thread = threading.Thread(target=self._run, name="detector", daemon=True)
 
     def add(self, cam_id: str, source: Callable, sink: Callable) -> None:
@@ -119,6 +121,9 @@ class DetectorWorker:
         self.ready.set()
         while not self._stop.is_set():
             t0 = time.monotonic()
+            if self.paused:
+                self._stop.wait(0.2)
+                continue
             batch = []
             for cid, src in self.sources.items():
                 fr = src()
@@ -129,8 +134,10 @@ class DetectorWorker:
                     results = self.det.detect([fr.img for _, fr in batch])
                 except Exception:
                     log.exception("ошибка детектора")
-                    results = [[] for _ in batch]
+                    self._stop.wait(0.5)
+                    continue  # результатов нет: если сбой не пройдёт, объекты перейдут в фиксированный план
                 for (cid, fr), dets in zip(batch, results):
                     self.last[cid] = (fr.seq, fr.ts, dets)
                     self.sinks[cid](fr, dets)
+            self.last_cycle = time.monotonic()
             self._stop.wait(max(0.01, self.period - (time.monotonic() - t0)))

@@ -49,11 +49,37 @@ export interface Snapshot extends SiteSummary {
     flow_window_s: Record<string, number>
     emergency: string[]
   }
-  cameras: { id: string; title: string; ok: boolean; fault: string | null; fault_title: string; fps: number; covers: string[] }[]
+  cameras: CamState[]
   equipment: { connected: boolean; mode: string | null; error: string | null; rejected: string | null }
   trip: string | null
   forced: string | null
   events: SiteEvent[]
+}
+
+/** Положение поворотного устройства камеры: смещение от положения при монтаже, °. */
+export interface Ptz {
+  pan_deg: number
+  tilt_deg: number
+  goal?: { pan_deg: number; tilt_deg: number } | null
+  moving: boolean
+  limits?: { pan_deg: [number, number]; tilt_deg: [number, number] } | null
+  azimuth_deg: number
+  tilt_down_deg: number
+  applied: { pan_deg: number; tilt_deg: number }
+}
+
+/** Состояние камеры: ok — зелёный, warn — оранжевый (изображение непригодно), fault — красный (неисправна). */
+export interface CamState {
+  id: string
+  title: string
+  ok: boolean
+  level: 'ok' | 'warn' | 'fault'
+  state: string | null
+  fault: string | null
+  fault_title: string
+  fps: number
+  covers: string[]
+  ptz: Ptz | null
 }
 
 export interface Group {

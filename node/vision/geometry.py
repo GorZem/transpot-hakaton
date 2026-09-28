@@ -20,13 +20,23 @@ APPROACH_LEN = 100.0  # длина зоны подхода от центра о�
 
 
 class CameraModel:
-    def __init__(self, cam: dict):
+    """Паспорт камеры. pan/tilt — поворот оси от положения при монтаже (поворотное устройство), °:
+    pan — по часовой стрелке, tilt — ниже. Паспорт задаёт исходное положение, поворот применяется к нему."""
+
+    def __init__(self, cam: dict, pan: float = 0.0, tilt: float = 0.0):
         self.id = cam["id"]
+        self.passport = cam
+        self.pan, self.tilt = float(pan), float(tilt)
         p = cam["pose"]
         self.pos = np.array([p["e"], p["n"], p["h"]], dtype=np.float64)
         tgt = np.array([p["target_e"], p["target_n"], 0.0])
         f = tgt - self.pos
-        self.f = f / np.linalg.norm(f)
+        f = f / np.linalg.norm(f)
+        if self.pan or self.tilt:
+            az = math.atan2(f[0], f[1]) + math.radians(self.pan)
+            el = math.asin(-f[2]) + math.radians(self.tilt)
+            f = np.array([math.sin(az) * math.cos(el), math.cos(az) * math.cos(el), -math.sin(el)])
+        self.f = f
         r = np.cross(self.f, [0.0, 0.0, 1.0])
         self.r = r / np.linalg.norm(r)
         self.u = np.cross(self.r, self.f)
@@ -81,9 +91,82 @@ class CameraModel:
         front &= (r2 < 4.0) & (d > 0.2)
         return np.column_stack([u, w]), front
 
+    def turned(self, pan: float, tilt: float) -> "CameraModel":
+        return CameraModel(self.passport, pan, tilt)
+
+    @property
+    def azimuth_deg(self) -> float:
+        return math.degrees(math.atan2(self.f[0], self.f[1])) % 360
+
+    @property
+    def tilt_down_deg(self) -> float:
+        return math.degrees(math.asin(-self.f[2]))
+
+    def project_polygon(self, poly: np.ndarray, epsilon_px: float = 2.5, min_area_px: float = 150.0) -> np.ndarray | None:
+        """Многоугольник на земле (N×2, м) → контур в кадре (пиксели) с обрезкой по краям кадра;
+        None, если в кадр попадает слишком мало. Прямые на земле — прямые без искажения, поэтому
+        обрезка идёт в плоскости без искажения, затем стороны сгущаются и искажаются объективом."""
+        poly = np.asarray(poly, dtype=np.float64).reshape(-1, 2)
+        v = np.column_stack([poly, np.zeros(len(poly))]) - self.pos[None, :]
+        pc = np.column_stack([v @ self.r, -(v @ self.u), v @ self.f])  # x вправо, y вниз, z вперёд
+        pc = _clip(list(pc), lambda q: q[2] - 1.0)                         # перед камерой
+        if len(pc) < 3:
+            return None
+        xy = [np.array([q[0] / q[2], q[1] / q[2]]) for q in pc]
+        corner = self.undistort(np.array([[self.w, self.h]], dtype=np.float64))[0]
+        X, Y = abs(corner[0]), abs(corner[1])
+        for fn in (lambda q: X - q[0], lambda q: q[0] + X, lambda q: Y - q[1], lambda q: q[1] + Y):
+            xy = _clip(xy, fn)
+            if len(xy) < 3:
+                return None
+        xy = np.array(xy)
+        dense = np.concatenate([np.linspace(xy[i], xy[(i + 1) % len(xy)], 16, endpoint=False) for i in range(len(xy))])
+        r2 = (dense ** 2).sum(axis=1)
+        d = 1 + self.D[0] * r2 + self.D[1] * r2 * r2
+        px = np.column_stack([self.K[0, 0] * dense[:, 0] * d + self.K[0, 2], self.K[1, 1] * dense[:, 1] * d + self.K[1, 2]])
+        px[:, 0] = np.clip(px[:, 0], 0, self.w - 1)
+        px[:, 1] = np.clip(px[:, 1], 0, self.h - 1)
+        approx = cv2.approxPolyDP(px.astype(np.float32).reshape(-1, 1, 2), epsilon_px, True).reshape(-1, 2)
+        if len(approx) < 3 or cv2.contourArea(approx) < min_area_px:
+            return None
+        return approx.astype(np.float64)
+
     def sees(self, en: np.ndarray, margin: int = 10) -> np.ndarray:
         px, front = self.ground_to_pixels(en)
         return front & (px[:, 0] > margin) & (px[:, 0] < self.w - margin) & (px[:, 1] > margin) & (px[:, 1] < self.h - margin)
+
+
+def _clip(poly: list, inside) -> list:
+    """Обрезка многоугольника полуплоскостью inside(q) >= 0 (Сазерленд — Ходжмен)."""
+    out = []
+    for i in range(len(poly)):
+        a, b = poly[i - 1], poly[i]
+        fa, fb = inside(a), inside(b)
+        if fb >= 0:
+            if fa < 0:
+                out.append(a + (b - a) * (fa / (fa - fb)))
+            out.append(b)
+        elif fa >= 0:
+            out.append(a + (b - a) * (fa / (fa - fb)))
+    return out
+
+
+def reproject_zones(zones: list[dict], old: CameraModel, new: CameraModel) -> list[dict]:
+    """Перенос зон, нарисованных на кадре, после поворота камеры: пиксели старого положения →
+    точки на земле → пиксели нового. Зоны, ушедшие из кадра, пропадают; вернувшись в кадр, камера
+    получит их снова из автоматической разметки или после повторной разметки."""
+    out = []
+    for z in zones:
+        px = np.array(z["points"], dtype=np.float64) * [old.w, old.h]
+        ground = old.pixels_to_ground(px, max_dist=400.0)
+        ground = ground[~np.isnan(ground[:, 0])]
+        if len(ground) < 3:
+            continue
+        poly = new.project_polygon(ground)
+        if poly is None:
+            continue
+        out.append({"key": z["key"], "points": [[round(float(x) / new.w, 4), round(float(y) / new.h, 4)] for x, y in poly]})
+    return out
 
 
 def cross2(a, b) -> float:

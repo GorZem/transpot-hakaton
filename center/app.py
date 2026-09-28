@@ -33,6 +33,19 @@ class ZonesBody(BaseModel):
     cameras: dict[str, list[ZoneBody]]
 
 
+class PtzBody(BaseModel):
+    pan_deg: float | None = None     # от положения при монтаже (или от текущего при relative), °
+    tilt_deg: float | None = None
+    relative: bool = False
+
+
+class DetectorBody(BaseModel):
+    paused: bool
+
+
+PAN_LIMIT_DEG = 90.0  # камера поворачивается не дальше 90° от положения при монтаже
+
+
 def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: dict | None = None,
                run_hub: bool = True, start_io: bool = True) -> FastAPI:
     cfg = cfg if cfg is not None else load_config()
@@ -140,7 +153,7 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
         for c in hub.sites[sid]["cameras"]:
             zones, custom = r.zones_for(c["id"])
             cams.append({"id": c["id"], "title": c["title"], "width": c["image"]["width"], "height": c["image"]["height"],
-                         "custom": custom, "zones": zones})
+                         "custom": custom, "zones": zones, "ptz": r.ptz_json(c["id"])})
         return {"targets": r.perception.geo.zone_targets(hub.sites[sid]), "cameras": cams}
 
     @app.get("/api/sites/{sid}/zones")
@@ -169,7 +182,7 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
         for cid, zones in body.cameras.items():
             custom[cid] = [{"key": list(z.key), "points": [[round(x, 4), round(y, 4)] for x, y in z.points]} for z in zones]
         r.set_zones(custom)
-        db.set_zones(sid, custom)
+        db.set_zones(sid, r.zones_record())
         return zones_payload(sid)
 
     @app.delete("/api/sites/{sid}/zones/{cam_id}")
@@ -177,8 +190,45 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
         r = rt(sid)
         custom = {k: v for k, v in (r.custom_zones or {}).items() if k != cam_id}
         r.set_zones(custom or None)
-        db.set_zones(sid, custom or None)
+        db.set_zones(sid, r.zones_record())
         return zones_payload(sid)
+
+    # ---------- поворот камер ----------
+    def ptz_call(sid: str, cam_id: str, **kw) -> dict:
+        r = rt(sid)
+        if cam_id not in r.streams:
+            raise HTTPException(404, f"нет камеры {cam_id}")
+        if r.ptz is None or r.ptz.supported.get(cam_id) is False:
+            raise HTTPException(409, "у камеры нет поворотного устройства")
+        try:
+            r.ptz_command(cam_id, **kw)
+        except Exception as e:
+            raise HTTPException(502, f"камера не выполнила команду: {e}")
+        return {"camera": r._cam_json(next(c for c in r.layout.cameras if c.id == cam_id)), "state": r.snapshot()}
+
+    @app.put("/api/sites/{sid}/cameras/{cam_id}/ptz")
+    def ptz(sid: str, cam_id: str, body: PtzBody):
+        """Повернуть камеру. Ход — не дальше 90° по азимуту от положения при монтаже. Пока камера
+        поворачивается, объект работает по фиксированному плану; после остановки калибровка и зоны пересчитываются."""
+        r = rt(sid)
+        pan = body.pan_deg
+        if pan is not None:
+            cur = (r.ptz_json(cam_id) or {}).get("goal") or {}
+            target = (cur.get("pan_deg") or 0.0) + pan if body.relative else pan
+            if abs(target) > PAN_LIMIT_DEG + 1e-6:
+                raise HTTPException(422, f"поворот ограничен ±{PAN_LIMIT_DEG:.0f}° от положения при монтаже")
+        return ptz_call(sid, cam_id, pan=pan, tilt=body.tilt_deg, relative=body.relative)
+
+    @app.post("/api/sites/{sid}/cameras/{cam_id}/ptz/home")
+    def ptz_home(sid: str, cam_id: str):
+        """Вернуть камеру в положение при монтаже."""
+        return ptz_call(sid, cam_id, home=True)
+
+    @app.post("/api/system/detector")
+    def detector_pause(body: DetectorBody):
+        """Остановить или продолжить распознавание — проверка аварийного режима «компьютерное зрение не работает»."""
+        hub.worker.paused = body.paused
+        return hub.system()
 
     @app.put("/api/sites/{sid}/params")
     def put_params(sid: str, body: dict):

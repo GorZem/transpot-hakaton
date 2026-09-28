@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, type Ptz } from '../api'
+import { CameraPtz } from './CameraPtz'
 
 type Pt = [number, number]
 type Key = (string | number)[]
 interface Zone { key: Key; points: Pt[] }
 interface Target { key: Key; type: 'crosswalk' | 'wait' | 'approach'; label: string }
-interface Cam { id: string; title: string; width: number; height: number; custom: boolean; zones: Zone[] }
+interface Cam { id: string; title: string; width: number; height: number; custom: boolean; zones: Zone[]; ptz: Ptz | null }
 interface ZonesData { targets: Target[]; cameras: Cam[] }
 
 const COLORS: Record<Target['type'], string> = { crosswalk: '#f2c21b', wait: '#e070d0', approach: '#17b86c' }
@@ -21,6 +22,7 @@ export function ZoneEditor({ siteId }: { siteId: string }) {
   const [dirty, setDirty] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [stamp, setStamp] = useState(() => Date.now())
+  const [turning, setTurning] = useState(false)
   const svg = useRef<SVGSVGElement>(null)
   const drag = useRef<{ zone: string; i: number } | null>(null)
 
@@ -32,13 +34,31 @@ export function ZoneEditor({ siteId }: { siteId: string }) {
   }, [siteId])
   useEffect(() => { load(false) }, [load])
   const cam = data?.cameras[camIdx]
+  // камера поворачивается: следим, пока центр не пересчитает зоны, затем показываем новый кадр и разметку
   useEffect(() => {
-    if (cam) {
+    if (!turning) return
+    const t = setInterval(() => {
+      api<ZonesData>(`/api/sites/${siteId}/zones`).then((d) => {
+        const c = d.cameras[camIdx]
+        setStamp(Date.now())
+        if (c && !c.ptz?.moving) {
+          setData(d)
+          setTurning(false)
+          setMsg({ ok: true, text: 'Камера повёрнута: калибровка и зоны пересчитаны.' })
+        } else if (c) {
+          setData((old) => old && { ...old, cameras: old.cameras.map((x, i) => (i === camIdx ? { ...x, ptz: c.ptz } : x)) })
+        }
+      }).catch(() => {})
+    }, 700)
+    return () => clearInterval(t)
+  }, [turning, siteId, camIdx])
+  useEffect(() => {
+    if (cam && !turning) {
       setZones(cam.zones.map((z) => ({ key: z.key, points: z.points.map((p) => [p[0], p[1]] as Pt) })))
       setDirty(false)
       setSel(null)
     }
-  }, [cam])
+  }, [cam, turning])
 
   if (!data || !cam) return <div className="panel empty">Загружаю разметку…</div>
   const W = cam.width, H = cam.height
@@ -115,11 +135,16 @@ export function ZoneEditor({ siteId }: { siteId: string }) {
           <span className="side-text">{cam.title}</span>
           <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setStamp(Date.now())}>Обновить кадр</button>
         </div>
+        {dirty
+          ? <div className="ptz muted">Поворот камеры: сначала сохраните или отмените правки зон.</div>
+          : <CameraPtz siteId={siteId} camId={cam.id} ptz={turning && cam.ptz ? { ...cam.ptz, moving: true } : cam.ptz}
+                       onChange={() => { setTurning(true); setMsg(null) }} />}
         <div className="ze-canvas">
           <img src={`/video/${cam.id}.jpg?raw=1&t=${stamp}`} alt={`Кадр: ${cam.title}`} draggable={false} />
+          {turning && <div className="ze-turning">Камера поворачивается — объект на фиксированном плане, зоны пересчитаются после остановки</div>}
           <svg ref={svg} viewBox={`0 0 ${W} ${H}`} onPointerMove={onMove} onPointerUp={() => (drag.current = null)}
                onPointerLeave={() => (drag.current = null)} onClick={(e) => e.target === svg.current && setSel(null)}>
-            {zones.map((z) => {
+            {!turning && zones.map((z) => {
               const t = targets.find((x) => k(x.key) === k(z.key))
               const on = k(z.key) === sel
               const color = COLORS[t?.type || 'wait']

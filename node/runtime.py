@@ -10,14 +10,21 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from node.control import Controller
-from node.equipment import EquipmentLink
+from node.equipment import CameraPtzLink, EquipmentLink
 from node.flow import FlowEstimator
 from node.model import MODE_TITLES, Camera, Mode, Observation, Ped, Veh, build_layout
 from node.params import Params
 from node.perception import Perception, Update
 from node.safety import Safety
 from node.vision.camera import FAULT_TITLES, CameraStream
-from node.vision.geometry import CameraModel
+from node.vision.geometry import CameraModel, reproject_zones
+
+# Состояния камеры, при которых изображение есть, но для распознавания непригодно (в админке — оранжевым).
+WARN_TITLES = {"moving": "поворот камеры: зоны пересчитываются", "cv": "компьютерное зрение не работает",
+               "empty": "не видно ни людей, ни машин"}
+WARN_FAULTS = {"black", "blind"}   # признаки по изображению, которые тоже «оранжевые»: камера цела, но не видит
+PTZ_SETTLE_S = 1.5                 # после остановки поворота выждать, затем пересчитать зоны
+CV_STALE_S = 6.0                   # столько без результатов распознавания — компьютерное зрение не работает
 
 
 @dataclass
@@ -49,6 +56,7 @@ class SiteRuntime:
         self.p = params or Params()
         self.layout = build_layout(site)
         self.cam_models = [CameraModel(c) for c in site.get("cameras", [])]
+        self.cam_pose: dict[str, tuple[float, float]] = {c.id: (0.0, 0.0) for c in self.cam_models}  # поворот, по которому считаются зоны
         self.perception = Perception(site, self.layout, self.cam_models, self.p)
         cover = self.perception.coverage
         self.layout.cameras = [Camera(c.id, c.title, tuple(sorted(cover.get(c.id, ())))) for c in self.layout.cameras]
@@ -57,6 +65,14 @@ class SiteRuntime:
         self.flows = {g: FlowEstimator(now) for g in self.layout.veh_groups()}
         self.streams = {c["id"]: CameraStream(c["id"], (equipment_url or "").rstrip("/") + c["stream"])
                         for c in site.get("cameras", [])}
+        self.ptz = CameraPtzLink(equipment_url, {c["id"]: c.get("ptz") or f"/api/cameras/{c['id']}/ptz"
+                                                 for c in site.get("cameras", [])}) if equipment_url else None
+        self.cam_warn: dict[str, str | None] = {cid: None for cid in self.streams}
+        self._motion: dict[str, float | None] = {cid: None for cid in self.streams}  # когда замечен поворот
+        self._last_seen: dict[str, float] = {}     # камера -> когда последний раз видела человека или машину
+        self._last_result: dict[str, float] = {}   # камера -> когда пришёл последний результат распознавания
+        self.worker = None
+        self.on_zones_changed = None               # центр сохраняет разметку и положения камер
         ctl = site.get("controller") or {}
         self.link = EquipmentLink(equipment_url, ctl["path"]) if equipment_url and ctl.get("path") else None
         self.engaged = False          # система управляет контроллером объекта
@@ -73,17 +89,29 @@ class SiteRuntime:
 
     # ---------- запуск ----------
     def start(self, detector_worker) -> None:
+        self.worker = detector_worker
         for cid, st in self.streams.items():
             st.start()
-            detector_worker.add(cid, self._source(cid), lambda fr, dets, cid=cid: self.perception.push(cid, fr, dets))
+            detector_worker.add(cid, self._source(cid), lambda fr, dets, cid=cid: self._on_detections(cid, fr, dets))
         if self.link:
             self.link.start()
+        if self.ptz:
+            self.ptz.start()
 
     def stop(self) -> None:
         for st in self.streams.values():
             st.stop()
         if self.link:
             self.link.stop()
+        if self.ptz:
+            self.ptz.stop()
+
+    def _on_detections(self, cid: str, fr, dets) -> None:  # поток детектора
+        mono = time.monotonic()
+        self._last_result[cid] = mono
+        if dets:
+            self._last_seen[cid] = mono
+        self.perception.push(cid, fr, dets)
 
     def _source(self, cid: str):
         st = self.streams[cid]
@@ -114,6 +142,55 @@ class SiteRuntime:
         cam = next(c for c in self.cam_models if c.id == cam_id)
         return self.perception.geo.auto_zones(cam), False
 
+    def restore(self, saved: dict | None) -> None:
+        """Разметка из базы: зоны и положения камер, при которых они нарисованы."""
+        saved = dict(saved or {})
+        poses = saved.pop("_poses", {}) or {}
+        for cid, (pan, tilt) in poses.items():
+            if cid in self.cam_pose and (pan or tilt):
+                self._set_model(cid, pan, tilt)
+        self.set_zones(saved or None, log=False)
+
+    def zones_record(self) -> dict:
+        """Разметка для сохранения: ручные зоны и положения камер."""
+        return {**(self.custom_zones or {}), "_poses": {cid: list(p) for cid, p in self.cam_pose.items()}}
+
+    def _set_model(self, cid: str, pan: float, tilt: float) -> tuple[CameraModel, CameraModel]:
+        i = next(k for k, c in enumerate(self.cam_models) if c.id == cid)
+        old = self.cam_models[i]
+        new = old.turned(pan, tilt)
+        self.cam_models[i] = new
+        self.cam_pose[cid] = (pan, tilt)
+        self.perception.cams[cid] = new
+        self.perception.coverage = cover = self.perception.geo.coverage(self.cam_models)
+        self.layout.cameras = [Camera(c.id, c.title, tuple(sorted(cover.get(c.id, ())))) for c in self.layout.cameras]
+        return old, new
+
+    def apply_pose(self, cid: str, pan: float, tilt: float) -> None:
+        """Камера повернулась: пересчитать калибровку, покрытие и зоны (ручные — через плоскость земли)."""
+        old, new = self._set_model(cid, pan, tilt)
+        custom = dict(self.custom_zones or {})
+        if cid in custom:
+            moved = reproject_zones(custom[cid], old, new)
+            if moved:
+                custom[cid] = moved
+            else:
+                del custom[cid]
+        self.set_zones(custom or None, log=False)
+        title = next((c.title for c in self.layout.cameras if c.id == cid), cid)
+        self._event("info", "camera", f"{title}: повёрнута на {pan:+.0f}° по азимуту, {tilt:+.0f}° по наклону "
+                    f"от положения при монтаже — калибровка и зоны пересчитаны")
+        if self.on_zones_changed:
+            self.on_zones_changed()
+
+    def ptz_command(self, cid: str, pan: float | None = None, tilt: float | None = None,
+                    relative: bool = False, home: bool = False) -> dict:
+        if self.ptz is None or cid not in self.streams:
+            raise KeyError(cid)
+        snap = self.ptz.command(cid, pan, tilt, relative, home)
+        self._motion[cid] = time.monotonic()   # объект уходит в фиксированный план сразу, не дожидаясь опроса
+        return snap
+
     def set_zones(self, custom: dict[str, list[dict]] | None, log: bool = True) -> None:
         """Применить разметку. Камеры без ручной разметки получают автоматическую в том же виде,
         чтобы зона, видимая двумя камерами, проверялась одинаково."""
@@ -128,7 +205,66 @@ class SiteRuntime:
 
     # ---------- такт ----------
     def healthy(self) -> set[str]:
-        return {cid for cid, f in self.cam_fault.items() if f is None}
+        """Камеры, по которым можно распознавать: исправны и изображение пригодно."""
+        return {cid for cid, f in self.cam_fault.items() if f is None and self.cam_warn.get(cid) is None}
+
+    def cam_state(self, cid: str) -> tuple[str | None, str, str]:
+        """(код, уровень ok | warn | fault, подпись). warn — оранжевый: камера цела, но распознавать не по чему."""
+        f = self.cam_fault.get(cid)
+        if f is not None:
+            return f, ("warn" if f in WARN_FAULTS else "fault"), FAULT_TITLES[f]
+        w = self.cam_warn.get(cid)
+        if w is not None:
+            title = WARN_TITLES[w]
+            if w == "empty":
+                title += f" дольше {self.p.empty_scene_s:.0f} с"
+            return w, "warn", title
+        return None, "ok", FAULT_TITLES[None]
+
+    def _check_ptz(self, mono: float) -> None:
+        if self.ptz is None:
+            return
+        for cid in self.streams:
+            st = self.ptz.state.get(cid)
+            if not st:
+                continue
+            dev = (float(st.get("pan_deg", 0.0)), float(st.get("tilt_deg", 0.0)))
+            cur = self.cam_pose[cid]
+            changed = abs(dev[0] - cur[0]) > 0.05 or abs(dev[1] - cur[1]) > 0.05
+            if st.get("moving"):
+                self._motion[cid] = mono
+            elif changed and self._motion[cid] is None:
+                self._motion[cid] = mono                      # повернули между опросами
+            elif self._motion[cid] is not None and mono - self._motion[cid] >= PTZ_SETTLE_S:
+                if changed:
+                    self.apply_pose(cid, *dev)
+                self._motion[cid] = None
+                self._last_seen[cid] = mono                   # новому виду — полный срок до «пустой сцены»
+
+    def _check_warn(self, mono: float) -> None:
+        titles = {c.id: c.title for c in self.layout.cameras}
+        w = self.worker
+        cv_down = w is not None and (bool(w.error) or not w.ready.is_set() or getattr(w, "paused", False)
+                                     or mono - getattr(w, "last_cycle", mono) > CV_STALE_S)
+        for cid in self.streams:
+            ok_img = self.cam_fault.get(cid) is None
+            if not ok_img:
+                self._last_seen[cid] = mono                   # после восстановления — полный срок
+                self._last_result[cid] = mono
+            warn = None
+            if self._motion.get(cid) is not None:
+                warn = "moving"
+            elif ok_img and w is not None and (cv_down or mono - self._last_result.setdefault(cid, mono) > CV_STALE_S):
+                warn = "cv"
+            elif ok_img and w is not None and mono - self._last_seen.setdefault(cid, mono) > self.p.empty_scene_s:
+                warn = "empty"
+            if warn != self.cam_warn.get(cid):
+                prev = self.cam_warn.get(cid)
+                self.cam_warn[cid] = warn
+                if warn is not None:
+                    self._event("warn", "camera", f"{titles[cid]}: {self.cam_state(cid)[2]}")
+                elif prev in ("empty", "cv") and ok_img:
+                    self._event("info", "camera", f"{titles[cid]}: изображение снова пригодно для распознавания")
 
     def _check_cameras(self) -> None:
         titles = {c.id: c.title for c in self.layout.cameras}
@@ -147,11 +283,17 @@ class SiteRuntime:
             return Mode.FLASHING, f"сработала защита: {self.trip}"
         if self.forced:
             return self.forced, "задан оператором"
-        bad = [c.title for c in self.layout.cameras if self.cam_fault.get(c.id) is not None]
-        if bad and len(bad) == len(self.layout.cameras):
-            return Mode.FIXED, "нет изображения ни с одной камеры"
+        cams = self.layout.cameras
+        moving = [c.title for c in cams if self.cam_warn.get(c.id) == "moving"]
+        if moving:
+            return Mode.FIXED, "поворот камеры: " + ", ".join(moving)
+        if cams and all(self.cam_warn.get(c.id) == "cv" for c in cams):
+            return Mode.FIXED, "компьютерное зрение не работает"
+        bad = [f"{c.title} — {self.cam_state(c.id)[2]}" for c in cams if self.cam_state(c.id)[0] is not None]
+        if bad and len(bad) == len(cams):
+            return Mode.FIXED, "нет пригодного изображения ни с одной камеры: " + "; ".join(bad)
         if bad:
-            return Mode.DEGRADED, "неисправна: " + ", ".join(bad)
+            return Mode.DEGRADED, "непригодна: " + "; ".join(bad)
         return Mode.ADAPTIVE, "все камеры исправны"
 
     def _steady_stage(self) -> tuple[int, set[str]] | None:
@@ -179,14 +321,18 @@ class SiteRuntime:
         if self._t_start is None:
             self._t_start = time.monotonic()
         warm = time.monotonic() - self._t_start < self.WARMUP_S
+        mono = time.monotonic()
+        self._check_ptz(mono)
         if warm:
             for cid, st in self.streams.items():
                 self.cam_fault[cid] = st.health()
+                self._last_seen[cid] = self._last_result[cid] = mono
             self.ctrl.set_mode(*self._choose_mode(), now)
             self.ctrl.drain_events()
             self.status_text = "Запуск: подключение камер и контроллера объекта"
             return
         self._check_cameras()
+        self._check_warn(mono)
         healthy = self.healthy()
         up = self.perception.update(healthy, self.signals)
         if up is not None:
@@ -341,16 +487,29 @@ class SiteRuntime:
                 "flow_window_s": {g: round(f.window_s) for g, f in self.flows.items()},
                 "emergency": sorted(o.emergency),
             },
-            "cameras": [{"id": x.id, "title": x.title, "ok": self.cam_fault.get(x.id) is None,
-                         "fault": self.cam_fault.get(x.id), "fault_title": FAULT_TITLES[self.cam_fault.get(x.id)],
-                         "fps": round(self.streams[x.id].fps, 1), "covers": list(x.covers)}
-                        for x in self.layout.cameras],
+            "cameras": [self._cam_json(x) for x in self.layout.cameras],
             "equipment": {"connected": bool(link and link.connected), "mode": link.device_mode if link else None,
                           "error": link.last_error if link else "не настроен", "rejected": link.rejected if link else None},
             "trip": self.trip,
             "forced": self.forced.value if self.forced else None,
             "events": self.recent[:15],
         }
+
+    def ptz_json(self, cid: str) -> dict | None:
+        st = self.ptz.state.get(cid) if self.ptz else None
+        if not st:
+            return None
+        cam = next(c for c in self.cam_models if c.id == cid)
+        return {"pan_deg": st.get("pan_deg", 0.0), "tilt_deg": st.get("tilt_deg", 0.0), "goal": st.get("goal"),
+                "moving": self._motion.get(cid) is not None, "limits": st.get("limits"),
+                "azimuth_deg": round(cam.azimuth_deg, 1), "tilt_down_deg": round(cam.tilt_down_deg, 1),
+                "applied": {"pan_deg": self.cam_pose[cid][0], "tilt_deg": self.cam_pose[cid][1]}}
+
+    def _cam_json(self, x) -> dict:
+        code, level, title = self.cam_state(x.id)
+        return {"id": x.id, "title": x.title, "ok": level == "ok", "level": level, "state": code,
+                "fault": code, "fault_title": title,
+                "fps": round(self.streams[x.id].fps, 1), "covers": list(x.covers), "ptz": self.ptz_json(x.id)}
 
     def layout_json(self) -> dict:
         L = self.layout

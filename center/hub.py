@@ -54,9 +54,8 @@ class Hub:
             rt = SiteRuntime(s, Params(**saved) if saved else Params(), self.equipment_url)
             if rt.link:
                 rt.link.heartbeat_s = eq.get("heartbeat_s", 5)
-            zones = db.get_zones(sid)
-            if zones:
-                rt.set_zones(zones, log=False)
+            rt.restore(db.get_zones(sid))
+            rt.on_zones_changed = lambda sid=sid, rt=rt: db.set_zones(sid, rt.zones_record())
             self.runtimes[sid] = rt
             for c in s["cameras"]:
                 self.camera_site[c["id"]] = sid
@@ -141,7 +140,7 @@ class Hub:
     def system(self) -> dict:
         return {"equipment_url": self.equipment_url, "detector": {
             "model": self.detector.model_name, "ready": self.worker.ready.is_set(), "error": self.worker.error,
-            "ms_per_image": round(self.detector.ms_per_image, 1)}}
+            "paused": self.worker.paused, "ms_per_image": round(self.detector.ms_per_image, 1)}}
 
     def set_params(self, sid: str, p: Params) -> None:
         self.runtimes[sid].update_params(p)
@@ -164,7 +163,8 @@ class Hub:
         # Показ строго вперёд по времени: кадр не старше уже показанного, иначе картинка дёргается назад.
         ov = rt.perception.snapshot_overlay(cam_id)
         fr, dets = latest, []
-        if ov is not None and rt.cam_fault.get(cam_id) is None and latest.ts - ov[0].ts < 1.5:
+        code, level, _ = rt.cam_state(cam_id)
+        if ov is not None and rt.cam_fault.get(cam_id) is None and code != "moving" and latest.ts - ov[0].ts < 1.5:
             fr, dets = ov
         with self._render_lock:
             served = self._served.get(cam_id)
@@ -192,7 +192,7 @@ class Hub:
         for i, ap in enumerate(geo.approaches):
             colors[("approach", i)] = SIG_BGR.get(rt.signals.get(ap.group), (200, 200, 200))
         h, w = img.shape[:2]
-        for z in rt.zones_for(cam_id)[0]:
+        for z in ([] if code == "moving" else rt.zones_for(cam_id)[0]):  # во время поворота зоны неверны
             pts = (np.array(z["points"]) * [w, h]).astype(np.int32)
             key = tuple(z["key"])
             cv2.polylines(img, [pts], True, colors.get(key, (200, 200, 200)), 2 if key[0] == "crosswalk" else 1, cv2.LINE_AA)
@@ -200,11 +200,14 @@ class Hub:
             x1, y1, x2, y2 = (int(v) for v in d.box)
             col = (0, 0, 255) if d.beacon else ((0, 170, 255) if d.kind == VEHICLE else (0, 220, 255))
             cv2.rectangle(img, (x1, y1), (x2, y2), col, 2)
-        fault = rt.cam_fault.get(cam_id)
-        if fault:
-            cv2.rectangle(img, (0, img.shape[0] - 34), (img.shape[1], img.shape[0]), (40, 40, 200), -1)
-            cv2.putText(img, "FAULT: " + fault.upper(), (12, img.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (255, 255, 255), 2, cv2.LINE_AA)
+        if code:
+            # красная полоса — неисправность камеры, оранжевая — изображение непригодно для распознавания
+            band = (40, 40, 200) if level == "fault" else (0, 140, 255)
+            label = {"moving": "PTZ: MOVING, RECALIBRATING", "cv": "VISION DOWN", "empty": "EMPTY SCENE",
+                     "blind": "NO VISIBILITY"}.get(code, code.upper())
+            cv2.rectangle(img, (0, img.shape[0] - 34), (img.shape[1], img.shape[0]), band, -1)
+            cv2.putText(img, ("FAULT: " if level == "fault" else "") + label, (12, img.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
         ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if not ok:
             return None

@@ -112,3 +112,63 @@ class EquipmentLink:
                 self.last_error = str(e)[:200]
                 self._last_sent = None  # после восстановления связи отправить состояние заново
                 self._stop.wait(1.0)
+
+
+class CameraPtzLink:
+    """Поворотные устройства камер объекта (HTTP, упрощённый аналог ONVIF PTZ).
+
+    Протокол:
+    - GET  {path}        — положение: pan_deg, tilt_deg (смещение от положения при монтаже), moving, limits;
+    - PUT  {path}        — повернуть: {"pan_deg", "tilt_deg", "relative"};
+    - POST {path}/home   — вернуть в положение при монтаже.
+    Положение опрашивается постоянно: камеру может повернуть не только оператор (ветер, вандал, монтажник).
+    """
+
+    def __init__(self, base_url: str, paths: dict[str, str], period_s: float = 0.5, timeout_s: float = 2.0):
+        self.base = base_url.rstrip("/")
+        self.paths = paths                        # камера -> путь PTZ
+        self.period, self.timeout = period_s, timeout_s
+        self.state: dict[str, dict] = {}          # камера -> последний ответ устройства
+        self.supported: dict[str, bool] = {}
+        self.error: str | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="ptz", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _request(self, method: str, url: str, body: dict | None = None) -> dict:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            return json.load(r)
+
+    def command(self, cam_id: str, pan: float | None = None, tilt: float | None = None,
+                relative: bool = False, home: bool = False) -> dict:
+        """Команда оператора (синхронно: ответ нужен админке сразу)."""
+        url = self.base + self.paths[cam_id]
+        if home:
+            snap = self._request("POST", url + "/home")
+        else:
+            snap = self._request("PUT", url, {"pan_deg": pan, "tilt_deg": tilt, "relative": relative})
+        self.state[cam_id] = snap
+        return snap
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            for cid, path in self.paths.items():
+                if self.supported.get(cid) is False:
+                    continue
+                try:
+                    self.state[cid] = self._request("GET", self.base + path)
+                    self.supported[cid] = True
+                    self.error = None
+                except urllib.error.HTTPError as e:
+                    if e.code in (404, 405, 501):
+                        self.supported[cid] = False   # камера без поворотного устройства
+                except Exception as e:
+                    self.error = str(e)[:200]
+            self._stop.wait(self.period)

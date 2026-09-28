@@ -23,6 +23,7 @@
   --warn-soft: #3d3310;
   --alarm: #e0474f;
   --alarm-soft: #3b1a1c;
+  --orange: #ff8a1c;      /* камера цела, но изображение непригодно для распознавания */
   --demo: #9aa7ff;
 
   --lamp-red: #e5383b;
@@ -107,6 +108,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 500; text-wrap: balance; }
 .btn:hover { border-color: var(--muted); }
 .btn.primary { background: var(--green); border-color: var(--green); color: var(--on-color); }
 .btn:disabled { opacity: .5; cursor: default; }
+.btn.on { border-color: var(--orange); color: var(--orange); }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel-2); flex-wrap: wrap; }
 .seg button { border: 0; background: transparent; padding: 5px 9px; cursor: pointer; font-size: 12px; }
 .seg button + button { border-left: 1px solid var(--line); }
@@ -143,6 +145,19 @@ table.t td { font-variant-numeric: tabular-nums; }
 .cam .cap .muted { margin-left: auto; font-size: 12px; white-space: nowrap; }
 .cam img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #0d0d0d; display: block; }
 .cam.bad img { outline: 3px solid var(--alarm); }
+.cam.warn img { outline: 3px solid var(--orange); }
+.cam .cap .cam-state { margin-left: auto; font-size: 12px; white-space: normal; text-align: right; }
+.cam-state.fault { color: var(--alarm); } .cam-state.warn { color: var(--orange); }
+.ptz { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.ptz.muted { color: var(--muted); }
+.ptz-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ptz-row .btn { padding: 4px 9px; }
+.ptz-slider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-family: var(--f-mono); font-size: 11.5px; }
+.ptz-slider input { flex: 1; min-width: 0; accent-color: var(--orange); }
+.ptz-slider b { color: var(--ink); font-weight: 600; min-width: 4ch; }
+.ptz-info { display: flex; flex-direction: column; gap: 2px; color: var(--muted); }
+.ptz-state { color: var(--orange); }
+.ptz-err { color: var(--alarm); }
 .alerts { background: var(--green); color: var(--on-color); border-radius: 4px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
 .alerts .a { display: grid; grid-template-columns: 18px 44px 1fr; gap: 6px; align-items: baseline; }
 .alerts .a small { display: block; opacity: .75; font-size: 11.5px; }
@@ -254,3 +269,6 @@ table.t td { font-variant-numeric: tabular-nums; }
 .cam-wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 .cam-stale { position: absolute; left: 8px; bottom: 8px; background: var(--alarm-soft); color: var(--alarm); font-size: 11.5px; padding: 3px 8px; border-radius: 4px; }
 .cam.bad .cam-frame { outline: 3px solid var(--alarm); }
+
+.ze-turning { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 12px; background: rgba(255, 138, 28, .92);
+  color: #1b1b1b; font-size: 12.5px; font-weight: 600; pointer-events: none; }
