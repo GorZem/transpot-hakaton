@@ -1,0 +1,253 @@
+{
+ "label": "Час пик",
+ "smart": {
+  "sim_minutes": 15.0,
+  "throughput_vph_total": 7533,
+  "cars_exited_vph": 2004,
+  "avg_queue_total": 142.0,
+  "peds_served": 1630,
+  "ped_wait_avg_s": 12.7,
+  "ped_wait_p90_s": 29.1,
+  "ped_wait_max_s": 240.0,
+  "red_crossing_share": 0.0018,
+  "objects": {
+   "t-sovkhoznaya-novorossiyskaya-w": {
+    "title": "Совхозная × Новороссийская, западное примыкание",
+    "throughput_vph": 356,
+    "avg_queue": 1.97,
+    "modes": [
+     "remote"
+    ]
+   },
+   "t-sovkhoznaya-novorossiyskaya-c": {
+    "title": "Совхозная × Новороссийская, среднее примыкание",
+    "throughput_vph": 240,
+    "avg_queue": 0.51,
+    "modes": [
+     "remote"
+    ]
+   },
+   "x-krasnodonskaya-sovkhoznaya": {
+    "title": "Краснодонская × Совхозная",
+    "throughput_vph": 824,
+    "avg_queue": 15.07,
+    "modes": [
+     "remote"
+    ]
+   },
+   "x-krasnodarskaya-krasnodonskaya": {
+    "title": "Краснодарская × Краснодонская",
+    "throughput_vph": 816,
+    "avg_queue": 36.79,
+    "modes": [
+     "remote"
+    ]
+   },
+   "x-krasnodarskaya-novorossiyskaya": {
+    "title": "Краснодарская × Новороссийская",
+    "throughput_vph": 548,
+    "avg_queue": 23.99,
+    "modes": [
+     "remote"
+    ]
+   },
+   "x-krasnodonskaya-stavropolskaya": {
+    "title": "Краснодонская × Ставропольская",
+    "throughput_vph": 944,
+    "avg_queue": 41.22,
+    "modes": [
+     "remote"
+    ]
+   },
+   "x-krasnodarskaya-sovkhoznaya": {
+    "title": "Краснодарская × Совхозная",
+    "throughput_vph": 852,
+    "avg_queue": 12.9,
+    "modes": [
+     "remote"
+    ]
+   },
+   "t-novorossiyskaya-stavropolskaya": {
+    "title": "Новороссийская × Ставропольская",
+    "throughput_vph": 532,
+    "avg_queue": 3.58,
+    "modes": [
+     "remote"
+    ]
+   },
+   "t-sovkhoznaya-novorossiyskaya-e": {
+    "title": "Совхозная × Новороссийская, восточное примыкание",
+    "throughput_vph": 432,
+    "avg_queue": 1.27,
+    "modes": [
+     "remote"
+    ]
+   },
+   "p-krasnodonskaya-south": {
+    "title": "Переход на Краснодонской у ул. Судакова",
+    "throughput_vph": 460,
+    "avg_queue": 2.36,
+    "modes": [
+     "remote"
+    ]
+   },
+   "p-krasnodonskaya-mid": {
+    "title": "Переход на Краснодонской, середина квартала",
+    "throughput_vph": 432,
+    "avg_queue": 0.88,
+    "modes": [
+     "remote"
+    ]
+   },
+   "p-krasnodonskaya-north": {
+    "title": "Переход на Краснодонской у Краснодарской",
+    "throughput_vph": 436,
+    "avg_queue": 0.79,
+    "modes": [
+     "remote"
+    ]
+   },
+   "p-krasnodarskaya": {
+    "title": "Переход на Краснодарской у Таганрогской",
+    "throughput_vph": 340,
+    "avg_queue": 0.31,
+    "modes": [
+     "remote"
+    ]
+   },
+   "p-stavropolskaya": {
+    "title": "Переход на Ставропольской у Таганрогской",
+    "throughput_vph": 320,
+    "avg_queue": 0.39,
+    "modes": [
+     "remote"
+    ]
+   }
+  }
+ },
+ "standard": {
+  "sim_minutes": 15.0,
+  "throughput_vph_total": 8168,
+  "cars_exited_vph": 2092,
+  "avg_queue_total": 142.4,
+  "peds_served": 1719,
+  "ped_wait_avg_s": 16.8,
+  "ped_wait_p90_s": 39.9,
+  "ped_wait_max_s": 353.3,
+  "red_crossing_share": 0.0029,
+  "objects": {
+   "t-sovkhoznaya-novorossiyskaya-w": {
+    "title": "Совхозная × Новороссийская, западное примыкание",
+    "throughput_vph": 464,
+    "avg_queue": 4.56,
+    "modes": [
+     "local"
+    ]
+   },
+   "t-sovkhoznaya-novorossiyskaya-c": {
+    "title": "Совхозная × Новороссийская, среднее примыкание",
+    "throughput_vph": 316,
+    "avg_queue": 0.04,
+    "modes": [
+     "local"
+    ]
+   },
+   "x-krasnodonskaya-sovkhoznaya": {
+    "title": "Краснодонская × Совхозная",
+    "throughput_vph": 856,
+    "avg_queue": 16.59,
+    "modes": [
+     "local"
+    ]
+   },
+   "x-krasnodarskaya-krasnodonskaya": {
+    "title": "Краснодарская × Краснодонская",
+    "throughput_vph": 928,
+    "avg_queue": 16.6,
+    "modes": [
+     "local"
+    ]
+   },
+   "x-krasnodarskaya-novorossiyskaya": {
+    "title": "Краснодарская × Новороссийская",
+    "throughput_vph": 540,
+    "avg_queue": 35.23,
+    "modes": [
+     "local"
+    ]
+   },
+   "x-krasnodonskaya-stavropolskaya": {
+    "title": "Краснодонская × Ставропольская",
+    "throughput_vph": 1100,
+    "avg_queue": 49.2,
+    "modes": [
+     "local"
+    ]
+   },
+   "x-krasnodarskaya-sovkhoznaya": {
+    "title": "Краснодарская × Совхозная",
+    "throughput_vph": 860,
+    "avg_queue": 9.1,
+    "modes": [
+     "local"
+    ]
+   },
+   "t-novorossiyskaya-stavropolskaya": {
+    "title": "Новороссийская × Ставропольская",
+    "throughput_vph": 620,
+    "avg_queue": 3.26,
+    "modes": [
+     "local"
+    ]
+   },
+   "t-sovkhoznaya-novorossiyskaya-e": {
+    "title": "Совхозная × Новороссийская, восточное примыкание",
+    "throughput_vph": 480,
+    "avg_queue": 5.0,
+    "modes": [
+     "local"
+    ]
+   },
+   "p-krasnodonskaya-south": {
+    "title": "Переход на Краснодонской у ул. Судакова",
+    "throughput_vph": 432,
+    "avg_queue": 1.66,
+    "modes": [
+     "local"
+    ]
+   },
+   "p-krasnodonskaya-mid": {
+    "title": "Переход на Краснодонской, середина квартала",
+    "throughput_vph": 444,
+    "avg_queue": 0.43,
+    "modes": [
+     "local"
+    ]
+   },
+   "p-krasnodonskaya-north": {
+    "title": "Переход на Краснодонской у Краснодарской",
+    "throughput_vph": 440,
+    "avg_queue": 0.35,
+    "modes": [
+     "local"
+    ]
+   },
+   "p-krasnodarskaya": {
+    "title": "Переход на Краснодарской у Таганрогской",
+    "throughput_vph": 292,
+    "avg_queue": 0.11,
+    "modes": [
+     "local"
+    ]
+   },
+   "p-stavropolskaya": {
+    "title": "Переход на Ставропольской у Таганрогской",
+    "throughput_vph": 396,
+    "avg_queue": 0.27,
+    "modes": [
+     "local"
+    ]
+   }
+  }
+ }
+}
