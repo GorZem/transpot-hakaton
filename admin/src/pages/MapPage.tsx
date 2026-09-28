@@ -51,7 +51,7 @@ export function MapPage() {
   return (
     <Shell connected={connected}>
       <div className="page with-left-wide">
-        <aside className="sidebar">
+        <aside className="sidebar side-after">
           <div className="side-h">Выбрать объект</div>
           <SearchBox onPick={(h: SearchHit) => select(h.site_id)} />
           <div className="side-text">Поиск по пересечению улиц или адресу дома. Двойной щелчок по объекту открывает мониторинг.</div>
@@ -59,8 +59,10 @@ export function MapPage() {
           <div onDoubleClick={() => selected && nav(`/monitoring/${selected}`)}>
             <SiteList sites={sites.filter((s) => s.equipped)} selected={selected} onPick={select} />
           </div>
-          <div className="side-h">Не оснащены</div>
-          <SiteList sites={sites.filter((s) => !s.equipped)} selected={selected} onPick={select} />
+          {sites.some((s) => !s.equipped) && <>
+            <div className="side-h">Не оснащены</div>
+            <SiteList sites={sites.filter((s) => !s.equipped)} selected={selected} onPick={select} />
+          </>}
         </aside>
         <div className="map-panel">
           <MapContainer center={[55.6765, 37.7535]} zoom={16}>

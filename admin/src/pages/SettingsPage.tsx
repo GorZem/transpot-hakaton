@@ -4,6 +4,7 @@ import { api, lastSite, rememberSite, useOverview, type SiteInfo } from '../api'
 import { SettingsTab } from '../components/SettingsTab'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
+import { MobileSitePicker } from '../components/MobileSitePicker'
 import { ZoneEditor } from '../components/ZoneEditor'
 
 interface SystemInfo {
@@ -40,9 +41,11 @@ export function SettingsPage() {
   return (
     <Shell connected={connected}>
       <div className="page with-left">
-        <aside className="sidebar">
-          <div className="side-h">Объект</div>
-          <SiteList sites={sites} selected={id} equippedOnly onPick={(sid) => nav(`/settings/${sid}`)} />
+        <aside className="sidebar side-after">
+          <div className="desktop-only">
+            <div className="side-h">Объект</div>
+            <SiteList sites={sites} selected={id} equippedOnly onPick={(sid) => nav(`/settings/${sid}`)} />
+          </div>
           <div className="side-h">Система</div>
           <div className="side-text">Оборудование: {sys?.equipment_url || '…'}</div>
           <div className="side-text">
@@ -50,6 +53,7 @@ export function SettingsPage() {
           </div>
         </aside>
         <div className="stack">
+          <MobileSitePicker sites={sites} selected={id} equippedOnly mapLink={false} onPick={(sid) => sid && nav(`/settings/${sid}`)} />
           <section className="panel tight">
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <div className="panel-title" style={{ margin: 0 }}>Настройки объекта{info ? ` · ${info.title}` : ''}</div>

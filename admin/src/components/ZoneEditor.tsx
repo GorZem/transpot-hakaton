@@ -12,6 +12,8 @@ interface ZonesData { targets: Target[]; cameras: Cam[] }
 const COLORS: Record<Target['type'], string> = { crosswalk: '#f2c21b', wait: '#e070d0', approach: '#17b86c' }
 const TYPE_TITLES: Record<Target['type'], string> = { crosswalk: 'Переход', wait: 'Зона ожидания', approach: 'Подход транспорта' }
 const k = (key: Key) => key.join('|')
+// на сенсорном экране вершины крупнее, чтобы попадать пальцем
+const COARSE = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
 
 /** Редактор зон компьютерного зрения на кадре камеры. Координаты хранятся в долях кадра (0…1). */
 export function ZoneEditor({ siteId }: { siteId: string }) {
@@ -66,7 +68,7 @@ export function ZoneEditor({ siteId }: { siteId: string }) {
   const targets = data.targets
   const selZone = sel ? byKey.get(sel) : undefined
   const selTarget = targets.find((t) => k(t.key) === sel)
-  const handleR = 7 * W / (svg.current?.getBoundingClientRect().width || W)
+  const handleR = (COARSE ? 13 : 7) * W / (svg.current?.getBoundingClientRect().width || W)
 
   const toLocal = (e: { clientX: number; clientY: number }): Pt => {
     const r = svg.current!.getBoundingClientRect()

@@ -4,6 +4,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContai
 import { api, fmt, pct, timeOf, useOverview, type AreaStats } from '../api'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
+import { MobileSitePicker } from '../components/MobileSitePicker'
 
 const RANGES: [number, string][] = [[24, 'Сутки'], [168, 'Неделя']]
 const axis = { stroke: '#4a4740', tick: { fill: '#a8a193' } }
@@ -35,6 +36,13 @@ export function StatsPage() {
     <Shell connected={connected}>
       <div className="page with-right">
         <div className="stack">
+          <MobileSitePicker sites={sites} selected={id} equippedOnly allLabel="Весь участок" mapLink={false}
+                            onPick={(sid) => nav(sid ? `/stats/${sid}` : '/stats')} />
+          <div className="mobile-only m-picker">
+            <div className="seg" role="group" aria-label="Период">
+              {RANGES.map(([h, t]) => <button key={h} className={h === hours ? 'on' : ''} onClick={() => setHours(h)}>{t}</button>)}
+            </div>
+          </div>
           <section className="panel" id="kpi">
             <div className="panel-title caps">Ключевые показатели · {title}</div>
             <div className="tiles">
@@ -158,7 +166,7 @@ export function StatsPage() {
           </section>
         </div>
 
-        <aside className="sidebar">
+        <aside className="sidebar desktop-only">
           <div className="side-h">Навигация по статистике</div>
           <button className="side-link" onClick={() => go('flow')}>Поток</button>
           <button className="side-link" onClick={() => go('peds')}>Пешеходы</button>

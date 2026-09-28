@@ -7,6 +7,7 @@ import {
 import { CameraPtz } from '../components/CameraPtz'
 import { CameraView } from '../components/CameraView'
 import { Schematic } from '../components/Schematic'
+import { MobileSitePicker } from '../components/MobileSitePicker'
 import { Shell } from '../components/Shell'
 import { SiteList } from '../components/SiteList'
 
@@ -95,10 +96,12 @@ export function MonitoringPage() {
   return (
     <Shell connected={connected}>
       <div className="page with-left">
-        <aside className="sidebar">
-          <Link to={`/map${id ? `?site=${id}` : ''}`} className="side-link">Выбрать камеру на карте</Link>
-          <div className="side-link" style={{ cursor: 'default' }}>Список камер</div>
-          <SiteList sites={sites} selected={id} onPick={(sid) => nav(`/monitoring/${sid}`)} />
+        <aside className="sidebar side-after">
+          <div className="desktop-only">
+            <Link to={`/map${id ? `?site=${id}` : ''}`} className="side-link">Выбрать камеру на карте</Link>
+            <div className="side-link" style={{ cursor: 'default' }}>Список камер</div>
+            <SiteList sites={sites} selected={id} onPick={(sid) => nav(`/monitoring/${sid}`)} />
+          </div>
 
           <div className="side-h">Режим работы светофора</div>
           {!info ? <div className="side-text">…</div> : !info.equipped ? (
@@ -133,6 +136,7 @@ export function MonitoringPage() {
         </aside>
 
         <div className="stack">
+          <MobileSitePicker sites={sites} selected={id} onPick={(sid) => sid && nav(`/monitoring/${sid}`)} />
           <section className="panel">
             {info && (
               <div className="panel-title" style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
