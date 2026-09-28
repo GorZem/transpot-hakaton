@@ -58,7 +58,13 @@ class SignalCommand(BaseModel):
 
 
 class FaultBody(BaseModel):
-    fault: str | None = Field(None, description="black | freeze | offline | noise | null — исправна")
+    fault: str | None = Field(None, description="black | freeze | offline | noise | fog | covered | null — исправна")
+
+
+class PtzBody(BaseModel):
+    pan_deg: float | None = Field(None, description="поворот от исходного направления, ° (плюс — по часовой), ход ±90°")
+    tilt_deg: float | None = Field(None, description="наклон от исходного, ° (плюс — ниже)")
+    relative: bool = Field(False, description="true — сдвинуть на столько от текущего положения")
 
 
 class ClearBody(BaseModel):
@@ -304,7 +310,8 @@ def create_app(st: State) -> FastAPI:
 
     @app.post("/api/cameras/{cid}/fault")
     def camera_fault(cid: str, body: FaultBody):
-        """Имитация неисправности: black — чёрный кадр, freeze — зависание, offline — нет потока, noise — помехи."""
+        """Имитация неисправности: black — чёрный кадр, freeze — зависание, offline — нет потока, noise — помехи,
+        fog — туман (нет видимости), covered — объектив закрыт."""
         rig = st.cams.rigs.get(cid)
         if rig is None:
             raise HTTPException(404, f"нет камеры {cid}")
@@ -312,6 +319,37 @@ def create_app(st: State) -> FastAPI:
             raise HTTPException(422, f"неизвестная неисправность; допустимы: {', '.join(FAULTS)} или null")
         rig.fault = body.fault
         return {"id": cid, "fault": rig.fault}
+
+    @app.get("/api/cameras/{cid}/ptz")
+    def camera_ptz(cid: str):
+        """Положение поворотного устройства: смещение от исходного направления, заданное положение, идёт ли поворот."""
+        rig = st.cams.rigs.get(cid)
+        if rig is None:
+            raise HTTPException(404, f"нет камеры {cid}")
+        return {"id": cid, **st.cams.ptz_state(rig)}
+
+    @app.put("/api/cameras/{cid}/ptz")
+    def camera_ptz_set(cid: str, body: PtzBody):
+        """Повернуть камеру. Ход по азимуту ±90° от исходного, наклон — от 5° до 75° вниз от горизонта;
+        за пределами — упор. Камера поворачивается плавно (30°/с по азимуту, 20°/с по наклону)."""
+        rig = st.cams.rigs.get(cid)
+        if rig is None:
+            raise HTTPException(404, f"нет камеры {cid}")
+        pan, tilt = body.pan_deg, body.tilt_deg
+        if body.relative:
+            pan = None if pan is None else rig.pan_goal + pan
+            tilt = None if tilt is None else rig.tilt_goal + tilt
+        rig.aim(pan, tilt)
+        return {"id": cid, **st.cams.ptz_state(rig)}
+
+    @app.post("/api/cameras/{cid}/ptz/home")
+    def camera_ptz_home(cid: str):
+        """Вернуть камеру в исходное положение."""
+        rig = st.cams.rigs.get(cid)
+        if rig is None:
+            raise HTTPException(404, f"нет камеры {cid}")
+        rig.aim(0.0, 0.0)
+        return {"id": cid, **st.cams.ptz_state(rig)}
 
     @app.post("/api/overview")
     def overview(object_id: str = Body(..., embed=True)):

@@ -109,7 +109,10 @@ PUT /api/objects/p-krasnodonskaya-mid/signals
 |---|---|
 | `POST /api/objects/{id}/pedestrians {"count": 10}` | группа пешеходов у перехода объекта |
 | `POST /api/objects/{id}/emergency` | скорая с маячками едет через объект |
-| `POST /api/cameras/{id}/fault {"fault": "black"}` | неисправность: `black`, `freeze`, `offline`, `noise`, `null` — исправна |
+| `POST /api/cameras/{id}/fault {"fault": "black"}` | неисправность: `black`, `freeze`, `offline`, `noise`, `fog` (туман, нет видимости), `covered` (объектив закрыт), `null` — исправна |
+| `GET /api/cameras/{id}/ptz` | поворотное устройство: `pan_deg`, `tilt_deg` (смещение от положения при монтаже), `moving`, `limits`, `home` |
+| `PUT /api/cameras/{id}/ptz {"pan_deg": 30, "tilt_deg": 0, "relative": false}` | повернуть камеру: ход ±90° по азимуту, наклон 5…75° вниз от горизонта, за пределами — упор; поворот плавный, 30°/с |
+| `POST /api/cameras/{id}/ptz/home` | вернуть камеру в положение при монтаже |
 | `PUT /api/scenario {"traffic_scale": 1.6, "pedestrian_scale": 2}` | интенсивность транспорта и пешеходов |
 | `POST /api/traffic/clear {"cars": true, "pedestrians": true}` | убрать машины и/или пешеходов (новые продолжат появляться на въездах) |
 | `POST /api/traffic/fill {"per_km": 8}` | сразу расставить машины по пустым полосам |

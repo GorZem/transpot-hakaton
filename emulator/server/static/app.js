@@ -11,7 +11,7 @@ const STATE_RU = {red: "красный", red_yellow: "красный + жёлт�
   yellow: "жёлтый", flash_yellow: "жёлтый мигающий", off: "выключен"};
 const MODE_RU = {local: "локальная программа", remote: "управляет система", flash: "жёлтый мигающий"};
 const KIND_RU = {crossing: "переход вне перекрёстка", cross: "крестовой перекрёсток", tee: "Т-образный перекрёсток"};
-const FAULT_RU = [[null, "Исправна"], ["black", "Чёрный кадр"], ["freeze", "Зависание"], ["offline", "Нет потока"], ["noise", "Помехи"]];
+const FAULT_RU = [[null, "Исправна"], ["black", "Чёрный кадр"], ["freeze", "Зависание"], ["offline", "Нет потока"], ["noise", "Помехи"], ["fog", "Туман"], ["covered", "Закрыт объектив"]];
 const LAMP = {red: "#ff5a4f", red_yellow: "#ff9a3c", green: "#3ccf7d", green_blink: "#3ccf7d", yellow: "#f2b705",
   flash_yellow: "#f2b705", off: "#444"};
 
@@ -240,6 +240,11 @@ function renderObj(o) {
       <div class="cbar"><span class="cname">${c.name}</span>
         ${FAULT_RU.map(([f, t]) => `<button class="fbtn ${f === null ? "ok" : ""} ${c.fault === f ? "on" : ""}" data-f="${f}">${t}</button>`).join("")}
       </div>
+      <div class="cbar ptz"><span class="cname">Поворот</span>
+        <button class="fbtn" data-p="-15" title="влево на 15°">◀ 15°</button><button class="fbtn" data-p="15" title="вправо на 15°">15° ▶</button>
+        <button class="fbtn" data-t="-5" title="выше на 5°">▲</button><button class="fbtn" data-t="5" title="ниже на 5°">▼</button>
+        <button class="fbtn" data-home="1">Исходное</button><span class="ptzv mono"></span>
+      </div>
     </div>`).join("");
   $("#obj").innerHTML = `
     <div class="sect">
@@ -264,10 +269,16 @@ function renderObj(o) {
   $("#obj").querySelectorAll(".cam[data-cam]").forEach(el => {
     const cid = el.dataset.cam;
     playCamera(el.querySelector("img"), cid);
-    el.querySelectorAll(".fbtn").forEach(b => b.onclick = async () => {
+    el.querySelectorAll(".fbtn[data-f]").forEach(b => b.onclick = async () => {
       const f = b.dataset.f === "null" ? null : b.dataset.f;
       await api(`/api/cameras/${cid}/fault`, {method: "POST", body: JSON.stringify({fault: f})});
-      el.querySelectorAll(".fbtn").forEach(x => x.classList.toggle("on", x === b));
+      el.querySelectorAll(".fbtn[data-f]").forEach(x => x.classList.toggle("on", x === b));
+    });
+    el.querySelectorAll(".ptz .fbtn").forEach(b => b.onclick = async () => {
+      const r = b.dataset.home ? await api(`/api/cameras/${cid}/ptz/home`, {method: "POST"})
+        : await api(`/api/cameras/${cid}/ptz`, {method: "PUT", body: JSON.stringify({
+            relative: true, pan_deg: +(b.dataset.p || 0), tilt_deg: +(b.dataset.t || 0)})});
+      showPtz(el, r);
     });
   });
   $("#release").onclick = () => sig(`/api/objects/${o.id}/release`, "POST");
@@ -294,12 +305,22 @@ function updateObj(o) {
       <span class="lbl">${g.label}<small>${name} · ${STATE_RU[g.state]}</small></span>
       <div class="acts">${vehButtons(g).map(s => `<button class="sbtn" data-g="${name}" data-s="${s}">${STATE_RU[s]}</button>`).join("")}</div>
     </div>`).join("");
+  for (const c of o.cameras) {
+    const el = document.querySelector(`.cam[data-cam="${c.id}"]`);
+    if (el && c.ptz) showPtz(el, c.ptz);
+  }
   const box = $("#groups");
   if (box.dataset.html !== html) {
     box.innerHTML = html; box.dataset.html = html;
     box.querySelectorAll(".sbtn").forEach(b => b.onclick = () =>
       sig(`/api/objects/${o.id}/signals`, "PUT", {groups: {[b.dataset.g]: b.dataset.s}}));
   }
+}
+
+function showPtz(el, p) {
+  const v = el.querySelector(".ptzv"); if (!v) return;
+  const sgn = x => (x > 0 ? "+" : "") + x.toFixed(0);
+  v.textContent = `${sgn(p.pan_deg)}° / ${sgn(p.tilt_deg)}°` + (p.moving ? " · поворачивается" : "");
 }
 
 async function sig(url, method, body) {

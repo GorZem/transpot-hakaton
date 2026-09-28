@@ -23,7 +23,13 @@ from emulator.config import CameraSettings
 from emulator.world.geom import heading_deg, right_normal, unit
 from emulator.world.network import Network, Node
 
-FAULTS = ("black", "freeze", "offline", "noise")
+FAULTS = ("black", "freeze", "offline", "noise", "fog", "covered")
+
+# Поворотное устройство камеры: смещение от исходного положения при монтаже.
+PAN_LIMIT_DEG = 90.0            # не дальше 90° влево и вправо от исходного направления
+TILT_ABS_DEG = (5.0, 75.0)      # наклон оси вниз от горизонта: от почти горизонта до почти отвесно
+PAN_SPEED_DPS = 30.0
+TILT_SPEED_DPS = 20.0
 
 
 @dataclass
@@ -32,7 +38,12 @@ class CameraSpec:
     object_id: str
     name: str
     pos: np.ndarray        # x, y, z
-    target: np.ndarray     # x, y, z
+    target: np.ndarray     # x, y, z — куда смотрит ось сейчас
+    home: np.ndarray | None = None  # куда смотрела ось при монтаже
+
+    def __post_init__(self):
+        if self.home is None:
+            self.home = self.target.copy()
 
 
 def place_cameras(net: Network, height: float) -> list[CameraSpec]:
@@ -125,6 +136,28 @@ class Rig:
     frame_no: int = 0                # номер кадра цикла, в котором камера поставлена на рендер
     labels: list | None = None      # разметка кадра, который сейчас рендерится
     labels_meta: dict | None = None
+    home_az: float = 0.0             # исходное направление оси: азимут и наклон вниз, °
+    home_tilt: float = 0.0
+    pan: float = 0.0                 # текущее смещение от исходного, °
+    tilt: float = 0.0
+    pan_goal: float = 0.0            # заданное смещение: камера поворачивается к нему плавно
+    tilt_goal: float = 0.0
+    moved_at: float = 0.0            # время последнего движения (time.monotonic)
+
+    @property
+    def moving(self) -> bool:
+        return abs(self.pan - self.pan_goal) > 1e-3 or abs(self.tilt - self.tilt_goal) > 1e-3
+
+    def tilt_range(self) -> tuple[float, float]:
+        return TILT_ABS_DEG[0] - self.home_tilt, TILT_ABS_DEG[1] - self.home_tilt
+
+    def aim(self, pan: float | None = None, tilt: float | None = None) -> None:
+        """Задать положение (смещение от исходного); за пределами хода — упор."""
+        if pan is not None:
+            self.pan_goal = max(-PAN_LIMIT_DEG, min(PAN_LIMIT_DEG, float(pan)))
+        if tilt is not None:
+            lo, hi = self.tilt_range()
+            self.tilt_goal = max(lo, min(hi, float(tilt)))
 
 
 class FrameHub:
@@ -228,7 +261,12 @@ class CameraManager:
         cam.setPos(*sp.pos)
         cam.lookAt(*sp.target)
         buf.setActive(False)
-        return Rig(sp, buf, tex, cam)
+        rig = Rig(sp, buf, tex, cam)
+        v = sp.target - sp.pos
+        if np.hypot(v[0], v[1]) > 1e-6:
+            rig.home_az = heading_deg(v[:2])
+            rig.home_tilt = math.degrees(math.atan2(-v[2], math.hypot(v[0], v[1])))
+        return rig
 
     def _build_poles(self) -> None:
         from emulator.render.scene import Mesh
@@ -255,7 +293,25 @@ class CameraManager:
         self.overview.cam_np.lookAt(n.xy[0], n.xy[1], 0)
 
     # ------------------------------------------------------------ каждый кадр
+    def _step_ptz(self, now: float) -> None:
+        dt = min(0.5, max(0.0, now - getattr(self, "_ptz_t", now)))
+        self._ptz_t = now
+        for rig in self.rigs.values():
+            if not rig.moving:
+                continue
+            dp, dtl = rig.pan_goal - rig.pan, rig.tilt_goal - rig.tilt
+            rig.pan += max(-PAN_SPEED_DPS * dt, min(PAN_SPEED_DPS * dt, dp))
+            rig.tilt += max(-TILT_SPEED_DPS * dt, min(TILT_SPEED_DPS * dt, dtl))
+            rig.moved_at = time.monotonic()
+            sp = rig.spec
+            az = math.radians(rig.home_az + rig.pan)
+            tl = math.radians(rig.home_tilt + rig.tilt)
+            f = np.array([math.sin(az) * math.cos(tl), math.cos(az) * math.cos(tl), -math.sin(tl)])
+            sp.target = sp.pos + f * (sp.pos[2] / max(math.sin(tl), 1e-3))
+            rig.cam_np.lookAt(*(sp.pos + f))
+
     def update(self, now: float, sim_t: float) -> None:
+        self._step_ptz(now)
         stamp = datetime.now()
         from panda3d.core import ClockObject
         fc = ClockObject.getGlobalClock().getFrameCount()
@@ -321,6 +377,11 @@ class CameraManager:
                 elif rig.fault == "noise":
                     img = cv2.GaussianBlur(img, (0, 0), 6)
                     img = cv2.add(img, np.random.randint(0, 60, img.shape, dtype=np.uint8))
+                elif rig.fault == "fog":  # густой туман: контраст почти пропал
+                    img = cv2.addWeighted(cv2.GaussianBlur(img, (0, 0), 3), 0.12, np.full_like(img, 205), 0.88, 0)
+                elif rig.fault == "covered":  # объектив закрыт (пакет, наклейка): тёмное пятно без деталей
+                    img = self._covered(img.shape)
+                img = self._sensor_noise(img)
                 self._osd(img, cid, stamp)
             ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, self.cs.jpeg_quality])
             if ok:
@@ -332,6 +393,29 @@ class CameraManager:
             rig.busy = False
             print("camera", rig.spec.id, e)
 
+    _cover_img: np.ndarray | None = None
+    _noise: list | None = None
+
+    def _sensor_noise(self, img: np.ndarray) -> np.ndarray:
+        """Шум матрицы ±2 уровня: у настоящей камеры соседние кадры никогда не совпадают до пикселя,
+        иначе пустая неподвижная сцена выглядит для центра как зависшее изображение."""
+        if self._noise is None or self._noise[0][0].shape != img.shape:
+            rng = np.random.default_rng(7)
+            self._noise = [(rng.integers(0, 3, img.shape, dtype=np.uint8), rng.integers(0, 3, img.shape, dtype=np.uint8))
+                           for _ in range(6)]
+        pos, neg = self._noise[np.random.randint(len(self._noise))]
+        return cv2.subtract(cv2.add(img, pos), neg)
+
+    def _covered(self, shape) -> np.ndarray:
+        if self._cover_img is None or self._cover_img.shape != shape:
+            h, w = shape[:2]
+            yy, xx = np.mgrid[0:h, 0:w]
+            r = np.hypot((xx - w * 0.45) / w, (yy - h * 0.55) / h)
+            v = np.clip(36 - r * 30, 20, 36)
+            img = np.stack([v * 0.8, v * 0.9, v], axis=-1)
+            self._cover_img = (img + np.random.normal(0, 1.2, img.shape)).clip(0, 255).astype(np.uint8)
+        return self._cover_img.copy()
+
     @staticmethod
     def _osd(img: np.ndarray, cid: str, stamp: datetime) -> None:
         text = f"{stamp:%Y-%m-%d %H:%M:%S}  {cid.upper()}"
@@ -341,6 +425,18 @@ class CameraManager:
         cv2.putText(img, text, (12, 8 + th), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     # ------------------------------------------------------------ сведения для API
+    @staticmethod
+    def ptz_state(rig: Rig) -> dict:
+        lo, hi = rig.tilt_range()
+        return {"pan_deg": round(rig.pan, 2), "tilt_deg": round(rig.tilt, 2),
+                "goal": {"pan_deg": round(rig.pan_goal, 2), "tilt_deg": round(rig.tilt_goal, 2)},
+                "moving": rig.moving,
+                "azimuth_deg": round((rig.home_az + rig.pan) % 360, 2), "tilt_down_deg": round(rig.home_tilt + rig.tilt, 2),
+                "home": {"azimuth_deg": round(rig.home_az, 2), "tilt_down_deg": round(rig.home_tilt, 2),
+                         "target": {"x": round(float(rig.spec.home[0]), 2), "y": round(float(rig.spec.home[1]), 2)}},
+                "limits": {"pan_deg": [-PAN_LIMIT_DEG, PAN_LIMIT_DEG], "tilt_deg": [round(lo, 2), round(hi, 2)]},
+                "speed_dps": {"pan": PAN_SPEED_DPS, "tilt": TILT_SPEED_DPS}}
+
     def describe(self, proj) -> list[dict]:
         out = []
         for rig in self.rigs.values():
@@ -352,6 +448,7 @@ class CameraManager:
                 "id": sp.id, "object_id": sp.object_id, "name": sp.name,
                 "stream_url": f"/cam/{sp.id}.mjpg", "snapshot_url": f"/cam/{sp.id}.jpg",
                 "fault": rig.fault,
+                "ptz": self.ptz_state(rig),
                 "position": {"x": round(float(sp.pos[0]), 2), "y": round(float(sp.pos[1]), 2),
                              "lat": round(lat, 7), "lon": round(lon, 7), "height_m": float(sp.pos[2])},
                 "view": {"azimuth_deg": round(heading_deg(v[:2]), 1), "tilt_down_deg": round(tilt, 1),
