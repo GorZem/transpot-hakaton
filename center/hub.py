@@ -198,7 +198,7 @@ class Hub:
             cv2.polylines(img, [pts], True, colors.get(key, (200, 200, 200)), 2 if key[0] == "crosswalk" else 1, cv2.LINE_AA)
         for d in dets:
             x1, y1, x2, y2 = (int(v) for v in d.box)
-            col = (0, 0, 255) if d.beacon else ((0, 170, 255) if d.kind == VEHICLE else (0, 220, 255))
+            col = (0, 170, 255) if d.kind == VEHICLE else (0, 220, 255)
             cv2.rectangle(img, (x1, y1), (x2, y2), col, 2)
         if code:
             # красная полоса — неисправность камеры, оранжевая — изображение непригодно для распознавания

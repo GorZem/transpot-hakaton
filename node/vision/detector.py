@@ -28,7 +28,7 @@ class Detection:
     cls: int
     conf: float
     box: tuple[float, float, float, float]
-    beacon: bool = False  # проблесковый маячок
+    beacon: str | None = None  # цвет проблескового маячка на кадре: blue | red
 
     @property
     def foot(self) -> tuple[float, float]:
@@ -36,20 +36,25 @@ class Detection:
         return (x1 + x2) / 2, y2
 
 
-def has_beacon(img: np.ndarray, box) -> bool:
+def has_beacon(img: np.ndarray, box) -> str | None:
+    """Цвет яркого маячка в верхней части рамки: 'blue', 'red' или None.
+    Один кадр не доказывает спецтранспорт (синий кузов тоже синий): маячок мигает синим и красным
+    по очереди, поэтому решение принимает трек по смене цветов на нескольких кадрах."""
     x1, y1, x2, y2 = (int(v) for v in box)
     h = y2 - y1
     if h < 12 or x2 - x1 < 12:
-        return False
+        return None
     top = img[max(0, y1 - h // 6): y1 + h // 3, max(0, x1): x2]
     if top.size == 0:
-        return False
+        return None
     hsv = cv2.cvtColor(top, cv2.COLOR_BGR2HSV)
     bright = (hsv[..., 1] > 150) & (hsv[..., 2] > 170)
-    blue = bright & (hsv[..., 0] > 100) & (hsv[..., 0] < 130)
-    red = bright & ((hsv[..., 0] < 8) | (hsv[..., 0] > 172))
     n = top.shape[0] * top.shape[1]
-    return blue.sum() > 0.01 * n and (blue.sum() + red.sum()) > 0.02 * n
+    blue = float((bright & (hsv[..., 0] > 100) & (hsv[..., 0] < 130)).sum()) / n
+    red = float((bright & ((hsv[..., 0] < 8) | (hsv[..., 0] > 172))).sum()) / n
+    if max(blue, red) < 0.01:
+        return None
+    return "blue" if blue >= red else "red"
 
 
 class Detector:

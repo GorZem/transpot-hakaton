@@ -23,6 +23,7 @@ MERGE = {PERSON: 1.2, VEHICLE: 3.0}     # детекции двух камер �
 TRACK_TTL_S = 1.6
 WAIT_DWELL_S = 2.0                      # столько стоять у перехода, чтобы считаться ждущим
 STOPPED_MPS = 1.5
+BEACON_WINDOW_S = 4.0                 # за это время у трека должны мелькнуть оба цвета маячка
 QUEUE_RANGE_M = 80.0                  # очередь считается на столько метров от стоп-линии
 
 
@@ -35,7 +36,7 @@ class Track:
     t_last: float
     vel: np.ndarray = field(default_factory=lambda: np.zeros(2))
     hits: int = 1
-    beacon: float = 0.0
+    beacons: list = field(default_factory=list)  # (время, цвет маячка) за последние секунды
     # пешеход
     cw: str | None = None
     zone: str | None = None
@@ -46,6 +47,11 @@ class Track:
     approach: int | None = None
     s: float | None = None
     stopped: bool = False
+
+    @property
+    def emergency(self) -> bool:
+        colors = [c for _, c in self.beacons]
+        return colors.count("blue") >= 1 and colors.count("red") >= 1 and len(colors) >= 3
 
     @property
     def speed(self) -> float:
@@ -144,10 +150,12 @@ class Perception:
             tr.pos = 0.5 * (tr.pos + tr.vel * dt) + 0.5 * p
             tr.t_last = ts
             tr.hits += 1
-            tr.beacon = 0.8 * tr.beacon + 0.2 * float(beacon)
+            if beacon:
+                tr.beacons.append((ts, beacon))
+            tr.beacons = [b for b in tr.beacons if ts - b[0] <= BEACON_WINDOW_S]
         for mi, (k, p, beacon) in enumerate(meas):
             if mi not in mt:
-                self.tracks.append(Track(next(self._ids), k, p.copy(), ts, ts, beacon=float(beacon)))
+                self.tracks.append(Track(next(self._ids), k, p.copy(), ts, ts, beacons=[(ts, beacon)] if beacon else []))
         self.tracks = [t for t in self.tracks if ts - t.t_last <= TRACK_TTL_S]
         for tr in self.tracks:
             if tr.hits >= 2:
@@ -229,7 +237,8 @@ class Perception:
                     if float(np.dot(t.vel, toward)) > 0.5 * t.speed:
                         e = gap / t.speed
                         eta = e if eta is None else min(eta, e)
-                if t.beacon > 0.3 and gap < 150:
+                # спецтранспорт: маячок мигал синим и красным, машина ещё не доехала до стоп-линии
+                if t.emergency and 0 < gap < 150:
                     o.emergency.add(g)
             o.queue[g], o.eta[g] = q, eta
         return o

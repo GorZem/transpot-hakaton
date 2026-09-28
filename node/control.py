@@ -15,6 +15,7 @@ from node.model import MODE_TITLES, Layout, Mode, Observation, Ped, Veh
 from node.params import Params
 
 EPS = 1e-6  # сравнения времени с запасом на погрешность float
+EMERGENCY_MAX_HOLD_S = 40.0  # дольше этого зелёный под спецтранспорт не держим
 
 # Константы прежней политики правил (policy="rules"), оставлена для сравнения на модели.
 LEGACY_DELAY_MAX_S = 45.0
@@ -70,6 +71,9 @@ class Controller:
         self.status = ""
         self.info: dict = {}
         self.events: list[ControllerEvent] = []
+        self.em: set[str] = set()                # подходы, где спецтранспорту сейчас положен приоритет
+        self._em_since: dict[str, float] = {}    # с какого момента на подходе виден спецтранспорт
+        self._em_expired: set[str] = set()       # приоритет уже снят по времени
         self.trans: Transition | None = Transition(0, now, set(), set(), set(layout.stages[0].veh), "запуск объекта")
 
     # ---------- внешнее управление ----------
@@ -115,7 +119,28 @@ class Controller:
         return ev
 
     # ---------- такт ----------
+    def _emergency(self, obs: Observation, now: float) -> set[str]:
+        """Подходы со спецтранспортом, которым ещё положен приоритет. Удержание зелёного не бесконечно:
+        если «спецтранспорт» не проехал за EMERGENCY_MAX_HOLD_S (ошибка распознавания, машина встала),
+        приоритет снимается, иначе перекрёсток может встать намертво."""
+        now_em = set(obs.emergency)
+        for g in list(self._em_since):
+            if g not in now_em:
+                del self._em_since[g]
+        self._em_expired &= now_em
+        out = set()
+        for g in now_em:
+            since = self._em_since.setdefault(g, now)
+            if now - since <= EMERGENCY_MAX_HOLD_S:
+                out.add(g)
+            elif g not in self._em_expired:
+                self._em_expired.add(g)
+                self._event("warn", "emergency", f"Спецтранспорт не проехал за {EMERGENCY_MAX_HOLD_S:.0f} с: приоритет снят "
+                                                 f"(«{self.L.groups[g].title}»)")
+        return out
+
     def tick(self, now: float, obs: Observation) -> dict[str, str]:
+        self.em = self._emergency(obs, now)
         self._track_queues(now, obs)
         if self.mode == Mode.FLASHING:
             self.status = "Объект не регулируется: жёлтый мигающий"
@@ -262,7 +287,7 @@ class Controller:
         st = self.L.stages[j]
         for g in st.veh:
             q, eta = obs.queue.get(g), obs.eta.get(g)
-            if q is None or q > 0 or (eta is not None and eta < 15) or g in obs.emergency:
+            if q is None or q > 0 or (eta is not None and eta < 15) or g in self.em:
                 return True
         return any(self._ped_demand(g, obs, now) for g in st.ped)
 
@@ -384,10 +409,10 @@ class Controller:
                      "group": n_wait >= p.group_threshold}
         if t < gmin - EPS:
             return Decision(False, status=f"Минимальный зелёный {gmin:.0f} с")
-        if obs.emergency & set(st.veh):
+        if self.em & set(st.veh):
             return Decision(False, status="Удержание: приближается спецтранспорт")
         for j in cands:
-            if obs.emergency & set(self.L.stages[j].veh):
+            if self.em & set(self.L.stages[j].veh):
                 return Decision(True, j, "приоритет спецтранспорту")
         if row is None:
             return Decision(False, status="Других запросов нет: зелёный остаётся")
@@ -442,7 +467,7 @@ class Controller:
                      "waiting": n, "max_wait_s": round(wait, 1), "gap": gap, "group": group, "min_green_s": gmin}
         if t < gmin:
             return Decision(False, status=f"Минимальный зелёный транспорту {gmin:.0f} с")
-        if obs.emergency & set(st.veh):
+        if self.em & set(st.veh):
             return Decision(False, status="Удержание: приближается спецтранспорт")
         if n is None:
             due = p.blind_call_s - (now - self.last_served[cw])
@@ -469,11 +494,11 @@ class Controller:
                      "demand": [self.L.stages[j].id for j in others], "green_s": round(t)}
         if t < gmin:
             return Decision(False, status=f"Минимальный зелёный {gmin:.0f} с")
-        if obs.emergency & set(st.veh):
+        if self.em & set(st.veh):
             if t < p.veh_max_green_s * 1.5:
                 return Decision(False, status="Удержание: спецтранспорт на подходе")
         for j in others:
-            if obs.emergency & set(self.L.stages[j].veh):
+            if self.em & set(self.L.stages[j].veh):
                 return Decision(True, j, "приоритет спецтранспорту")
         if not others:
             return Decision(False, status="Других запросов нет: зелёный продлевается")
