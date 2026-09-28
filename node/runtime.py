@@ -118,10 +118,20 @@ class SiteRuntime:
         return lambda: st.latest() if self.cam_fault.get(cid) is None else None
 
     # ---------- управление оператора ----------
+    released = False  # оператор вернул объект на штатную программу контроллера
+
     def set_forced_mode(self, mode: Mode | None) -> None:
         self.forced = mode
+        self.released = False
         self._event("warn" if mode else "info", "operator",
                     f"Оператор: {'режим «' + MODE_TITLES[mode] + '»' if mode else 'автоматический выбор режима'}")
+
+    def set_released(self) -> None:
+        """Стандартный (статический) режим: система отпускает светофор, дорожный контроллер работает
+        по своей штатной программе. Камеры и статистика продолжают работать, фазы система не переключает."""
+        self.forced = None
+        self.released = True
+        self._event("warn", "operator", "Оператор: штатная программа контроллера, система не управляет светофором")
 
     def reset_trip(self) -> None:
         if self.trip:
@@ -347,6 +357,16 @@ class SiteRuntime:
         mode, reason = self._choose_mode()
         self.ctrl.set_mode(mode, reason, now)
         link = self.link
+        if self.released:
+            # управление отдано контроллеру объекта; без команд и heartbeat связь сама вернёт его к своей программе
+            self.engaged = False
+            if link:
+                link.active = False
+            self.signals = dict(link.device_groups) if link else {}
+            self.status_text = "Штатная программа контроллера: включена оператором"
+            self.minute.mode_s["local"] = self.minute.mode_s.get("local", 0.0) + dt
+            self.ctrl.drain_events()
+            return
         if link is None or not link.connected:
             if self.engaged:
                 self._event("critical", "equipment", "Нет связи с контроллером объекта: объект работает по своей программе")
@@ -445,6 +465,8 @@ class SiteRuntime:
         return "ok"
 
     def mode_title(self) -> str:
+        if self.released:
+            return "Штатная программа (оператор)"
         if self.link is None or not self.link.connected:
             return "Нет связи с контроллером"
         if not self.engaged:
@@ -491,7 +513,7 @@ class SiteRuntime:
             "equipment": {"connected": bool(link and link.connected), "mode": link.device_mode if link else None,
                           "error": link.last_error if link else "не настроен", "rejected": link.rejected if link else None},
             "trip": self.trip,
-            "forced": self.forced.value if self.forced else None,
+            "forced": "local" if self.released else (self.forced.value if self.forced else None),
             "events": self.recent[:15],
         }
 

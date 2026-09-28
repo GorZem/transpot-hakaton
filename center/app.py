@@ -5,6 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -21,7 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ModeBody(BaseModel):
-    mode: Mode | None = None
+    # null — автоматически; fixed — статический цикл системы; flashing — жёлтый мигающий;
+    # local — штатная программа контроллера объекта (система не управляет)
+    mode: Mode | Literal["local"] | None = None
 
 
 class ZoneBody(BaseModel):
@@ -244,7 +247,10 @@ def create_app(db_path: str | None = None, sites_path: str | None = None, cfg: d
     @app.post("/api/sites/{sid}/mode")
     def mode(sid: str, body: ModeBody):
         r = rt(sid)
-        r.set_forced_mode(body.mode)
+        if body.mode == "local":
+            r.set_released()
+        else:
+            r.set_forced_mode(body.mode)
         return r.snapshot()
 
     @app.post("/api/sites/{sid}/reset")

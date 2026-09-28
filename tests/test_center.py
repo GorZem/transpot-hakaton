@@ -57,3 +57,20 @@ def test_no_equipment_means_no_control(client):
     st = client.get("/api/sites/p-krasnodonskaya-mid/state").json()
     assert st["engaged"] is False and st["status"] == "alarm"
     assert st["mode"] == "local"
+
+
+def test_operator_standard_program_and_back(client):
+    """Стандартный режим: система отпускает светофор на штатную программу контроллера и возвращает управление."""
+    sid = "p-krasnodonskaya-mid"
+    rt = client.app.state.hub.runtimes[sid]
+    rt._t_start = 0.0  # без паузы на подключение камер
+    st = client.post(f"/api/sites/{sid}/mode", json={"mode": "local"}).json()
+    assert st["forced"] == "local"
+    for k in range(5):
+        rt.tick(k * 0.1, 0.1)
+    st = client.get(f"/api/sites/{sid}/state").json()
+    assert st["engaged"] is False and st["mode_title"].startswith("Штатная программа")
+    assert rt.link is None or rt.link.active is False
+    st = client.post(f"/api/sites/{sid}/mode", json={"mode": None}).json()
+    assert st["forced"] is None and rt.released is False
+    assert client.post(f"/api/sites/{sid}/mode", json={"mode": "что-то"}).status_code == 422

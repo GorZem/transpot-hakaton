@@ -15,7 +15,12 @@ const SIGNAL_TITLES: Record<string, string> = {
   yellow: 'жёлтый', yellow_flash: 'жёлтый мигающий', off: 'выключен',
 }
 const DEVICE_MODES: Record<string, string> = { remote: 'управляет система', local: 'своя программа', flash: 'жёлтый мигающий' }
-const MODES: [string | null, string][] = [[null, 'Авто'], ['fixed', 'Фикс.'], ['flashing', 'Аварийный']]
+const MODES: [string | null, string, string][] = [
+  [null, 'Умный', 'Система решает по камерам'],
+  ['fixed', 'Статический цикл', 'Система ведёт фиксированный цикл, без камер'],
+  ['local', 'Штатная программа', 'Система отпускает светофор: работает программа дорожного контроллера'],
+  ['flashing', 'Аварийный', 'Жёлтый мигающий'],
+]
 
 function Lamp({ s }: { s?: string }) {
   const v = s || 'red'
@@ -110,8 +115,8 @@ export function MonitoringPage() {
                 </div>
               )}
               <div className="seg" role="group" aria-label="Режим оператора" style={{ marginTop: 4 }}>
-                {MODES.map(([m, t]) => (
-                  <button key={t} className={(snap?.forced ?? null) === m ? 'on' : ''} disabled={busy}
+                {MODES.map(([m, t, hint]) => (
+                  <button key={t} title={hint} className={(snap?.forced ?? null) === m ? 'on' : ''} disabled={busy}
                           onClick={() => act('/mode', { mode: m })}>{t}</button>
                 ))}
               </div>
